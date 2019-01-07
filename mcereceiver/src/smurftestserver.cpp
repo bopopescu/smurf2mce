@@ -18,6 +18,8 @@ class SmurfReceiver
 
       unsigned fullCount_;
 
+      unsigned maxSize_;
+
       zmq::context_t context_;
 
       zmq::socket_t socket_;
@@ -38,9 +40,13 @@ class SmurfReceiver
 
       unsigned getFullCount();
 
+      unsigned getMaxSize();
+
+      void resetMaxSize();
+
 };
 
-SmurfReceiver::SmurfReceiver(const char* portnum) : fullCount_(0), context_(1), socket_(context_, ZMQ_PULL)
+SmurfReceiver::SmurfReceiver(const char* portnum) : fullCount_(0), maxSize_(0), context_(1), socket_(context_, ZMQ_PULL)
 {
 
    printf("binding to %s\n", portnum);
@@ -78,6 +84,8 @@ void SmurfReceiver::runThread()
 
          messageQueue_.push( m );
 
+	 maxSize_ = maxSize_ < messageQueue_.size() ? messageQueue_.size() : maxSize_;
+
          boost::this_thread::interruption_point();
 
       }
@@ -96,6 +104,16 @@ MessagePtr SmurfReceiver::receive()
 unsigned SmurfReceiver::getFullCount()
 {
    return fullCount_;
+}
+
+unsigned SmurfReceiver::getMaxSize()
+{
+   return maxSize_;
+}
+
+void SmurfReceiver::resetMaxSize()
+{
+   maxSize_ = 0;
 }
 
 SmurfReceiver::~SmurfReceiver()
@@ -192,16 +210,19 @@ int main()
 	if (syncbox != (last_syncbox + 1)) missing_frames++; 
       } else {
         fifo_error = 0;
+	R.resetMaxSize();
       }
     last_syncbox = syncbox;
     if(!(j%slow_divider))
       {
 	printf("S1: lclfrm=%10d ,sync=%10d, data0= %6d d_shft7=%6d,  missfrm = %u\n", j,syncbox, *(tmp+43), ((int32_t)*(tmp+43))/128,  missing_frames );
 	printf("S2: row_len=%4u, num_rows_reported=%3u, data_rate = %6u, num_rows=%3u\n", *(tmp+2), *(tmp+3), *(tmp+4), *(tmp+9));
-	printf("S3: bytes_written=%i, fifo_error=%i, smurf_full_count=%u\n", b, fifo_error, R.getFullCount());
+	printf("S3: bytes_written=%i, fifo_error=%i, max_depth=%u, smurf_full_count=%u\n", b, fifo_error, R.getMaxSize(), R.getFullCount());
 	printf("\n");
       }
-    if ( P.write_pipe((MCE_t*) tmp, MCE_frame_length) == -1 )   // blocking
+
+    b = P.write_pipe((MCE_t*) tmp, MCE_frame_length);
+    if ( b == -1 )   // blocking
         fifo_error++;
     j++;
     
