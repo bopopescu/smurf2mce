@@ -180,7 +180,7 @@ int main()
 	  if(n != 1) continue; // probably lost if we got here
 	  if(!strcmp(variable, "port_number"))
 	    { 
-	    strncpy(portnum + 8, value, 92); // copy over port number
+	    strncpy(portnum, value, 100); // copy over port number
 	    }
 	  if(!strcmp(variable, "named_pipe"))
 	    { 
