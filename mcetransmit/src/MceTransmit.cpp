@@ -44,6 +44,8 @@ namespace ris = rogue::interfaces::stream;
 // Smurf2mce definition should be in smurftcp.h, but doesn't work, not sure why
 class Smurf2MCE : public rogue::interfaces::stream::Slave {
 
+  bool debug_;
+
   static const unsigned queueDepth = 100;
 
 // Queue
@@ -58,6 +60,7 @@ public:
   uint32_t getCount() { return rxCount; } // Total frames
   uint32_t getBytes() { return rxBytes; } // Total Bytes
   uint32_t getLast()  { return rxLast;  } // Last frame size
+  void     setDebug(bool debug) { debug_ = debug; return;  } // Last frame size
 
 
   bool initialized;
@@ -105,6 +108,7 @@ public:
             .def("getCount", &Smurf2MCE::getCount)
             .def("getBytes", &Smurf2MCE::getBytes)
             .def("getLast",  &Smurf2MCE::getLast)
+            .def("setDebug",  &Smurf2MCE::setDebug)
          ;
          bp::implicitly_convertible<boost::shared_ptr<Smurf2MCE>, ris::SlavePtr>();
   };
@@ -311,7 +315,7 @@ void Smurf2MCE::runThread(const char* endpoint)
              }
           
            memcpy(tcpbuf + MCEheaderlength * sizeof(MCE_t) + smurfsamples * sizeof(avgdata_t), &checksum, sizeof(MCE_t)); 
-            if (!(internal_counter++ % slow_divider))
+            if ( debug_ &&  ( !(internal_counter++ % slow_divider) ) )
               {
                
                 printf("num_avg=%3u, syncword =%6u, epics_deltaT = %u us, unixdeltaT = %u us \n", cnt ,H->get_syncword(),V->Timingsystem->delta/1000, V-> Unix_time->delta/1000 );
@@ -724,11 +728,8 @@ bool SmurfConfig::read_config_file(void)
     if(!strcmp(variable, "filter_gain"))
       {
 	tmpf = strtof(value, &endptr);  // base 10, doh
-	if (filter_g != tmp)
-	  {
-	    printf("updated filter gain from %g to %g, str=%s\n", filter_g, tmpf, value);
-	    filter_g = (filter_t) tmpf;
-	  }
+	printf("updated filter gain from %g to %g, str=%s\n", filter_g, tmpf, value);
+	filter_g = (filter_t) tmpf;
 	continue;
       }
     for (uint n = 0; n < 16;  n++)
