@@ -25,6 +25,7 @@ import time
 import struct
 from packaging import version
 from pathlib import Path
+import re
 
 import pyrogue
 import pyrogue.utilities.fileio
@@ -267,6 +268,31 @@ class LocalServer(pyrogue.Root):
             pyrogue.streamConnect(data_fifo, self.smurf2mce)
             #pyrogue.streamTap(fpga.stream.application(0xC1), rx)
 
+            # Look for the TesBias registers
+            # TesBias register are located on
+            # FpgaTopLevel.AppTop.AppCore.RtmCryoDet.RtmSpiMax
+            # And their name is TesBiasDacDataRegCh[n], where x = [0:31]
+            self.TestBiasVars = []
+            self.TestBiasRegEx = re.compile('.*TesBiasDacDataRegCh\[(\d+)\]$')
+            for var in self.FpgaTopLevel.AppTop.AppCore.RtmCryoDet.RtmSpiMax.variableList:
+                m = self.TestBiasRegEx.match(var.name)
+                if m:
+                    reg_index = int(m[1])
+                    if reg_index < 32:
+                        print(f'Found TesBias register: {var.name}, with index {reg_index}')
+                        self.TestBiasVars.append(var)
+
+            # Check that we have all 32 TesBias registers
+            if len(self.TestBiasVars) == 32:
+                print(f'Found 32 TesBias registers. Assigning listener functions')
+                # Add listener to the TesBias registers
+                for var in self.TestBiasVars:
+                    var.addListener(self.send_test_bias)
+                # Prepare a buffer to holds the TesBias register values
+                self.TesBiasValue = [0] * 32
+            else:
+                print(f'Error: {len(self.TestBiasVars)} TesBias register were found instead of 32. Aborting')
+
             # Run control for streaming interfaces
             self.add(pyrogue.RunControl(
                 name='streamRunControl',
@@ -398,6 +424,12 @@ class LocalServer(pyrogue.Root):
 
             self.ReadAll()
 
+            # Call the get() method on the tesBias variable to force the call to
+            # send_test_bias and update the array in Smurf2MCE
+            for var in self.TestBiasVars:
+                print(f'Calling get() on {var.name}')
+                var.get()
+
         except KeyboardInterrupt:
             print("Killing server creation...")
             super(LocalServer, self).stop()
@@ -507,6 +539,30 @@ class LocalServer(pyrogue.Root):
         print("Running garbage collection...")
         gc.collect()
         print( gc.get_stats() )
+
+    # Send TesBias to Smurf2MCE
+    def send_test_bias(self, path, value, disp):
+        print(f'send_test_bias: path = {path}, value = {value}')
+        # Look for the register index
+        m = self.TestBiasRegEx.match(path)
+        if m:
+            reg_index = int(m[1])
+            if reg_index < 32:
+
+                # Update reg value in the buffer
+                self.TesBiasValue[reg_index] = value
+
+                # The index  send to Smurf2MCE
+                tes_bias_index = reg_index // 2
+
+                if reg_index % 2:
+                    # Odd TesBias: send the difference between the previous value and this one
+                    tes_bias_val = self.TesBiasValue[reg_index-1] - self.TesBiasValue[reg_index]
+                else:
+                    # Even TesBias: send the difference between this value and the next one
+                    tes_bias_val = self.TesBiasValue[reg_index] - self.TesBiasValue[reg_index+1]
+
+                self.smurf2mce.setTesBias(tes_bias_index, tes_bias_val)
 
 class PcieCard():
     """
