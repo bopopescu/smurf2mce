@@ -31,6 +31,8 @@
 #include <smurf2mce.h>
 #include <smurftcp.h>
 #include <zmq.hpp>
+#include <iostream>
+#include <stdexcept>
 
 void error(const char *msg){perror(msg);};    // Just prints errors
 
@@ -44,6 +46,7 @@ namespace ris = rogue::interfaces::stream;
 // Smurf2mce definition should be in smurftcp.h, but doesn't work, not sure why
 class Smurf2MCE : public rogue::interfaces::stream::Slave {
 
+private:
   bool debug_;
 
   static const unsigned queueDepth = 4000;
@@ -55,13 +58,17 @@ class Smurf2MCE : public rogue::interfaces::stream::Slave {
 //! Thread background
   void runThread(const char* endpoint);
 
+  // TesBias values
+  static const std::size_t maxTesBiasSize = 16;
+  std::array<int32_t, maxTesBiasSize> tesBias;
+
 public:
   uint32_t rxCount, rxBytes, rxLast;
   uint32_t getCount() { return rxCount; } // Total frames
   uint32_t getBytes() { return rxBytes; } // Total Bytes
   uint32_t getLast()  { return rxLast;  } // Last frame size
   void     setDebug(bool debug) { debug_ = debug; return;  } // Last frame size
-
+  void     setTesBias(std::size_t index, int32_t val); // Receive the TesBias from pyrogue
 
   bool initialized;
   uint internal_counter, fast_internal_counter;  // first is mce frames, second is smurf frames
@@ -109,12 +116,16 @@ public:
             .def("getBytes", &Smurf2MCE::getBytes)
             .def("getLast",  &Smurf2MCE::getLast)
             .def("setDebug",  &Smurf2MCE::setDebug)
+            .def("setTesBias", &Smurf2MCE::setTesBias)
          ;
          bp::implicitly_convertible<boost::shared_ptr<Smurf2MCE>, ris::SlavePtr>();
   };
 };
 
-Smurf2MCE::Smurf2MCE() : ris::Slave()
+Smurf2MCE::Smurf2MCE()
+:
+  ris::Slave(),
+  tesBias()
 {
   rxCount = 0;
   rxBytes = 0;
@@ -405,6 +416,24 @@ Smurf2MCE::~Smurf2MCE() // destructor
 {
 }
 
+// Receive the TesBias from pyrogue
+void Smurf2MCE::setTesBias(std::size_t index, int32_t val)
+{
+  // Check if we are in range
+  if (index >= maxTesBiasSize)
+    std::cerr << "Invalid TesBias index: " << index << ". Omitting..." << std::endl;
+
+  std::cout << "Setting TesBias " << index << " to " << val << std::endl;
+
+  // Set the TesBias value
+  tesBias.at(index) = val;
+
+  // Print full content of the TesBias array
+  std::cout << "TestBias content: " << std::endl;
+  for(const auto& bias: tesBias)
+    std::cout << bias << ' ';
+  std::cout << std::endl;
+}
 // Decodes information in the header part of the data from smurf
 SmurfHeader::SmurfHeader()
 {
