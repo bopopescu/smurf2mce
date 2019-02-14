@@ -423,16 +423,8 @@ void Smurf2MCE::setTesBias(std::size_t index, int32_t val)
   if (index >= maxTesBiasSize)
     std::cerr << "Invalid TesBias index: " << index << ". Omitting..." << std::endl;
 
-  std::cout << "Setting TesBias " << index << " to " << val << std::endl;
-
   // Set the TesBias value
   tesBias.at(index) = val;
-
-  // Print full content of the TesBias array
-  std::cout << "TestBias content: " << std::endl;
-  for(const auto& bias: tesBias)
-    std::cout << bias << ' ';
-  std::cout << std::endl;
 }
 // Decodes information in the header part of the data from smurf
 SmurfHeader::SmurfHeader()

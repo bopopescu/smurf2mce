@@ -427,7 +427,6 @@ class LocalServer(pyrogue.Root):
             # Call the get() method on the tesBias variable to force the call to
             # send_test_bias and update the array in Smurf2MCE
             for var in self.TestBiasVars:
-                print(f'Calling get() on {var.name}')
                 var.get()
 
         except KeyboardInterrupt:
@@ -542,7 +541,6 @@ class LocalServer(pyrogue.Root):
 
     # Send TesBias to Smurf2MCE
     def send_test_bias(self, path, value, disp):
-        print(f'send_test_bias: path = {path}, value = {value}')
         # Look for the register index
         m = self.TestBiasRegEx.match(path)
         if m:
