@@ -277,7 +277,7 @@ class LocalServer(pyrogue.Root):
             for var in self.FpgaTopLevel.AppTop.AppCore.RtmCryoDet.RtmSpiMax.variableList:
                 m = self.TestBiasRegEx.match(var.name)
                 if m:
-                    reg_index = int(m[1])
+                    reg_index = int(m[1]) - 1
                     if reg_index < 32:
                         print(f'Found TesBias register: {var.name}, with index {reg_index}')
                         self.TestBiasVars.append(var)
@@ -544,7 +544,7 @@ class LocalServer(pyrogue.Root):
         # Look for the register index
         m = self.TestBiasRegEx.match(path)
         if m:
-            reg_index = int(m[1])
+            reg_index = int(m[1]) - 1
             if reg_index < 32:
 
                 # Update reg value in the buffer
