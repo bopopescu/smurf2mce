@@ -39,7 +39,7 @@ public:
   MCEHeader(void);  // creates header
   void make_header(void); // creates new header, icrements counters etc.
   void set_word(uint offset, uint32_t value); // set word in header
-
+  uint32_t get_word(uint offset); // get word in header
 };
 
 

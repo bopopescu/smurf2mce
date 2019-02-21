@@ -636,6 +636,11 @@ void MCEHeader::set_word(uint offset, uint32_t value)
   mce_header[offset] = value & 0xffffffff; // just write value.
 }
 
+uint32_t MCEHeader::get_word(uint offset)
+{
+  return mce_header[offset] & 0xffffffff; // just read value.
+}
+
 // Reads and interprest the smurf2mce.cfg file.
 SmurfConfig::SmurfConfig(void)
 {
