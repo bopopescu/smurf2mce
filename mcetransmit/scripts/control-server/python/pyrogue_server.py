@@ -553,13 +553,10 @@ class LocalServer(pyrogue.Root):
                 # The index  send to Smurf2MCE
                 tes_bias_index = reg_index // 2
 
-                if reg_index % 2:
-                    # Odd TesBias: send the difference between the previous value and this one
-                    tes_bias_val = self.TesBiasValue[reg_index-1] - self.TesBiasValue[reg_index]
-                else:
-                    # Even TesBias: send the difference between this value and the next one
-                    tes_bias_val = self.TesBiasValue[reg_index] - self.TesBiasValue[reg_index+1]
+                # Calculate the difference between DAC bias values
+                tes_bias_val = self.TesBiasValue[2*tes_bias_index] - self.TesBiasValue[2*tes_bias_index+1]
 
+                # Send the difference value to smurf2mce
                 self.smurf2mce.setTesBias(tes_bias_index, tes_bias_val)
 
 class PcieCard():
