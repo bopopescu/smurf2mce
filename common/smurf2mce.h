@@ -87,6 +87,7 @@ const uint MCEheader_num_rows_value = 33;
 
 const int MCEheader_syncbox_offset = 10;  // words offset to syncbox output
 
+const int MCEheader_user_word_offset = 12; // User word, we will write the TesBias value here
 
 // smurf header byte offsets
 const int h_version_offset = 0; // offset of version word
