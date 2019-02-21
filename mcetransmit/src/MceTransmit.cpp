@@ -308,6 +308,7 @@ void Smurf2MCE::runThread(const char* endpoint)
            M->set_word( MCEheader_version_offset,  MCEheader_version); // can be in constructor
            M->set_word( MCEheader_num_rows_offset, H->get_num_rows());
            M->set_word( MCEheader_syncbox_offset, H->get_syncword());
+           M->set_word( MCEheader_user_word_offset, static_cast<uint32_t>((80000 * H->get_tes_bias(12)) / 262144) );
 
            // test data insertion
            if(H->get_test_mode()) T->gen_test_mce_data(average_samples, H->get_test_mode(), H->get_syncword(), H->get_test_parameter());
