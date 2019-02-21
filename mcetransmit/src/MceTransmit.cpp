@@ -70,7 +70,7 @@ public:
   uint32_t getBytes() { return rxBytes; } // Total Bytes
   uint32_t getLast()  { return rxLast;  } // Last frame size
   void     setDebug(bool debug) { debug_ = debug; return;  } // Last frame size
-  void     setTesBias(std::size_t index, int32_t val); // Receive the TesBias from pyrogue
+  void     setTesBias(std::size_t index, int32_t value); // Receive the TesBias from pyrogue
 
   bool initialized;
   uint internal_counter, fast_internal_counter;  // first is mce frames, second is smurf frames
@@ -427,7 +427,7 @@ Smurf2MCE::~Smurf2MCE() // destructor
 }
 
 // Receive the TesBias from pyrogue
-void Smurf2MCE::setTesBias(std::size_t index, int32_t val)
+void Smurf2MCE::setTesBias(std::size_t index, int32_t value)
 {
   // Hold the mutex while the data tesBias array is being written to.
   std::lock_guard<std::mutex> lock(*tba.getMutex());
