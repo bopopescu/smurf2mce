@@ -33,6 +33,7 @@
 #include <zmq.hpp>
 #include <iostream>
 #include <stdexcept>
+#include "tesbiasarray.h"
 
 void error(const char *msg){perror(msg);};    // Just prints errors
 
@@ -60,7 +61,8 @@ private:
 
   // TesBias values
   static const std::size_t maxTesBiasSize = 16;
-  std::array<int32_t, maxTesBiasSize> tesBias;
+  std::array<uint8_t, TesBiasBufferSize> tesBias; // Array to hold the TesBias values
+  TesBiasArray tba; // Object to access the Tesbias array
 
 public:
   uint32_t rxCount, rxBytes, rxLast;
@@ -125,7 +127,8 @@ public:
 Smurf2MCE::Smurf2MCE()
 :
   ris::Slave(),
-  tesBias()
+  tesBias(),
+  tba(tesBias.data(), TesBiasCount)
 {
   rxCount = 0;
   rxBytes = 0;
@@ -243,6 +246,13 @@ void Smurf2MCE::runThread(const char* endpoint)
            d = (smurf_t*) (buffer+smurfheaderlength); // pointer to data
            p =  (smurf_t*) (buffer_last+smurfheaderlength);  // pointer to previous data set
            // V->run(H);
+
+           // Copy TES bias data into Smurf header. Hold mutex while reading the data
+           {
+              std::lock_guard<std::mutex> lock(*tba.getMutex());
+              H->put_field(h_tes_dac_offset,  h_tes_dac_width, tesBias.data());
+           }
+
            if(H->get_test_mode()) T->gen_test_smurf_data(d, H->get_test_mode(), H->get_syncword(), H->get_test_parameter());   // are we using test data, use pointer to data
 
            for(j = 0; j < smurfsamples; j++)
@@ -419,15 +429,15 @@ Smurf2MCE::~Smurf2MCE() // destructor
 // Receive the TesBias from pyrogue
 void Smurf2MCE::setTesBias(std::size_t index, int32_t val)
 {
-  // Check if we are in range
-  if (index >= maxTesBiasSize)
-    std::cerr << "Invalid TesBias index: " << index << ". Omitting..." << std::endl;
+  // Hold the mutex while the data tesBias array is being written to.
+  std::lock_guard<std::mutex> lock(*tba.getMutex());
 
-  // Set the TesBias value
-  tesBias.at(index) = val;
+  tba.setWord(index, value);
 }
 // Decodes information in the header part of the data from smurf
 SmurfHeader::SmurfHeader()
+:
+  tba(&header[h_tes_dac_offset], TesBiasCount)
 {
 
   last_frame_count = 0;
@@ -446,6 +456,7 @@ SmurfHeader::SmurfHeader()
 void SmurfHeader::copy_header(uint8_t *buffer)
 {
   header = buffer;  // just move the pointer
+  tba.setPtr(&header[h_tes_dac_offset]); // Update the TesBias array pointer
   data_ok = true;  // This is where we first get new data so star with header OK.
 }
 
@@ -616,6 +627,20 @@ uint SmurfHeader::average_control(int num_averages) // returns num averages when
   return(0);
 }
 
+// Get a TES bias value from the smurf header
+int SmurfHeader::get_tes_bias(std::size_t index)
+{
+  try
+  {
+    return tba.getWord(index);
+  }
+  catch (std::runtime_error &e)
+  {
+    std::cerr << "Error on SmurfHeader::get_tes_bias trying to read a TES bias: " << std::endl;
+    std::cerr << e.what() << std::endl;
+    return 0;
+  }
+}
 
 // manages the header for MCE data
 MCEHeader::MCEHeader()

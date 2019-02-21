@@ -1,5 +1,6 @@
 #include <time.h> // used for the test  sleep function. Just for the t est prgram.
 //#include "smurf2mce.h"  // defines all the SMURF stuff
+#include "tesbiasarray.h"
 
 #ifndef __SMURFTCP_H__
 #define __SMURFTCP_H__
@@ -85,6 +86,11 @@ public:
   void put_field(int offset, int width, void *data);  // for adding to smurf header
 
   void clear_average(); // clears aveage counters
+
+  int get_tes_bias(std::size_t index); // Get a tes bias value.
+
+private:
+  TesBiasArray tba; // Object to access the Tesbias array
 };
 
 
