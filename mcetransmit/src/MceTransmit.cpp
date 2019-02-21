@@ -32,7 +32,6 @@
 #include <smurftcp.h>
 #include <zmq.hpp>
 #include <iostream>
-#include <stdexcept>
 #include "tesbiasarray.h"
 
 void error(const char *msg){perror(msg);};    // Just prints errors
@@ -60,7 +59,6 @@ private:
   void runThread(const char* endpoint);
 
   // TesBias values
-  static const std::size_t maxTesBiasSize = 16;
   std::array<uint8_t, TesBiasBufferSize> tesBias; // Array to hold the TesBias values
   TesBiasArray tba; // Object to access the Tesbias array
 
