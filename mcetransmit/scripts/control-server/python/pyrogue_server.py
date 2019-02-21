@@ -554,7 +554,7 @@ class LocalServer(pyrogue.Root):
                 tes_bias_index = reg_index // 2
 
                 # Calculate the difference between DAC bias values
-                tes_bias_val = self.TesBiasValue[2*tes_bias_index] - self.TesBiasValue[2*tes_bias_index+1]
+                tes_bias_val = self.TesBiasValue[2*tes_bias_index+1] - self.TesBiasValue[2*tes_bias_index]
 
                 # Send the difference value to smurf2mce
                 self.smurf2mce.setTesBias(tes_bias_index, tes_bias_val)
