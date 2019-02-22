@@ -268,6 +268,15 @@ class LocalServer(pyrogue.Root):
             pyrogue.streamConnect(data_fifo, self.smurf2mce)
             #pyrogue.streamTap(fpga.stream.application(0xC1), rx)
 
+            # Add Local variable to set the TesBias scale factor. The variable has a listener function
+            # which is called when a new value is written to it.
+            self.add(pyrogue.LocalVariable(
+                name='TesBiasSF',
+                description='Scale factor apply to the TesBias values before writing it to the MCE header',
+                value=1.0,
+                mode='RW'))
+            self.TesBiasSF.addListener(self.send_test_bias_sf)
+
             # Look for the TesBias registers
             # TesBias register are located on
             # FpgaTopLevel.AppTop.AppCore.RtmCryoDet.RtmSpiMax
@@ -429,6 +438,10 @@ class LocalServer(pyrogue.Root):
             for var in self.TestBiasVars:
                 var.get()
 
+            # Call the get method on the tesBias variable to force the call to
+            # send_tes_bias_sf and update the factor in Smurf2MCE
+            self.TesBiasSF.get()
+
         except KeyboardInterrupt:
             print("Killing server creation...")
             super(LocalServer, self).stop()
@@ -558,6 +571,13 @@ class LocalServer(pyrogue.Root):
 
                 # Send the difference value to smurf2mce
                 self.smurf2mce.setTesBias(tes_bias_index, tes_bias_val)
+
+    # Send the TES bias scale factor to Smurf2MCE
+    def send_test_bias_sf(self, path, value, disp):
+        if (value == 0.0):
+            print("Error. Scale factor can not be set to zero. Aborting...")
+
+        self.smurf2mce.setTesBiasSF(value)
 
 class PcieCard():
     """
