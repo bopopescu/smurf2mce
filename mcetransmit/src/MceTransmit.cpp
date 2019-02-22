@@ -61,6 +61,7 @@ private:
   // TesBias values
   std::array<uint8_t, TesBiasBufferSize> tesBias; // Array to hold the TesBias values
   TesBiasArray tba; // Object to access the Tesbias array
+  float tesBiasSF; // TesBias scale factor
 
 public:
   uint32_t rxCount, rxBytes, rxLast;
@@ -69,6 +70,7 @@ public:
   uint32_t getLast()  { return rxLast;  } // Last frame size
   void     setDebug(bool debug) { debug_ = debug; return;  } // Last frame size
   void     setTesBias(std::size_t index, int32_t value); // Receive the TesBias from pyrogue
+  void     setTesBiasSF(float sf); // Receive the TesBias scale factor from pyrogue
 
   bool initialized;
   uint internal_counter, fast_internal_counter;  // first is mce frames, second is smurf frames
@@ -117,6 +119,7 @@ public:
             .def("getLast",  &Smurf2MCE::getLast)
             .def("setDebug",  &Smurf2MCE::setDebug)
             .def("setTesBias", &Smurf2MCE::setTesBias)
+            .def("setTesBiasSF", &Smurf2MCE::setTesBiasSF)
          ;
          bp::implicitly_convertible<boost::shared_ptr<Smurf2MCE>, ris::SlavePtr>();
   };
@@ -126,7 +129,8 @@ Smurf2MCE::Smurf2MCE()
 :
   ris::Slave(),
   tesBias(),
-  tba(tesBias.data(), TesBiasCount)
+  tba(tesBias.data(), TesBiasCount),
+  tesBiasSF(1.0)
 {
   rxCount = 0;
   rxBytes = 0;
@@ -306,7 +310,7 @@ void Smurf2MCE::runThread(const char* endpoint)
            M->set_word( MCEheader_version_offset,  MCEheader_version); // can be in constructor
            M->set_word( MCEheader_num_rows_offset, H->get_num_rows());
            M->set_word( MCEheader_syncbox_offset, H->get_syncword());
-           M->set_word( MCEheader_user_word_offset, static_cast<uint32_t>((80000 * H->get_tes_bias(12)) / 262144) );
+           M->set_word( MCEheader_user_word_offset, static_cast<uint32_t>( tesBiasSF * H->get_tes_bias(12) ) );
 
            // test data insertion
            if(H->get_test_mode()) T->gen_test_mce_data(average_samples, H->get_test_mode(), H->get_syncword(), H->get_test_parameter());
@@ -433,6 +437,19 @@ void Smurf2MCE::setTesBias(std::size_t index, int32_t value)
 
   tba.setWord(index, value);
 }
+
+// Receive the TesBias scale factor from pyrogue
+void Smurf2MCE::setTesBiasSF(float sf)
+{
+  // Hold the mutex while the data tesBias array is being written to.
+  std::lock_guard<std::mutex> lock(*tba.getMutex());
+
+  if (sf == 0.0)
+    std::cerr << "Error: TesBias factor can not be set to zero. Aborting..." << std::endl;
+
+  tesBiasSF = sf;
+}
+
 // Decodes information in the header part of the data from smurf
 SmurfHeader::SmurfHeader()
 :
