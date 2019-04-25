@@ -64,7 +64,7 @@ def usage(name):
         "devices for Bay0")
     print("    --disable-bay1             : Disable the instantiation of the"\
         "devices for Bay1")
-    printf("   --disable-gc               : Disable python's garbage collection"\
+    print("    --disable-gc               : Disable python's garbage collection"\
         "(enabled by default)")
     print("")
     print("Examples:")
