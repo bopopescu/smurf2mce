@@ -818,7 +818,7 @@ if __name__ == "__main__":
             "ha:sp:e:d:nb:f:c:l:u:",
             ["help", "addr=", "server", "pyro=", "epics=", "defaults=", "nopoll",
             "stream-size=", "stream-type=", "commType=", "pcie-rssi-link=", "dump-pvs=",
-            "disable-bay0", "disable-bay1", "--disable-gc"])
+            "disable-bay0", "disable-bay1", "disable-gc"])
     except getopt.GetoptError:
         usage(sys.argv[0])
         sys.exit()
