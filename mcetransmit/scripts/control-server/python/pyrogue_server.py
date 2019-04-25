@@ -31,11 +31,6 @@ import pyrogue.utilities.fileio
 import rogue.interfaces.stream
 import MceTransmit
 
-import gc
-gc.disable()
-print("GARBAGE COLLECTION DISABLED")
-
-
 PIDFILE = '/tmp/smurf.pid'
 
 # Print the usage message
@@ -69,6 +64,8 @@ def usage(name):
         "devices for Bay0")
     print("    --disable-bay1             : Disable the instantiation of the"\
         "devices for Bay1")
+    print("    --disable-gc               : Disable python's garbage collection"\
+        "(enabled by default)")
     print("")
     print("Examples:")
     print("    {} -a IP_address                            :".format(name),\
@@ -227,7 +224,7 @@ class LocalServer(pyrogue.Root):
     """
     def __init__(self, ip_addr, config_file, server_mode, group_name, epics_prefix,\
         polling_en, comm_type, pcie_rssi_link, stream_pv_size, stream_pv_type,\
-        pv_dump_file, disable_bay0, disable_bay1):
+        pv_dump_file, disable_bay0, disable_bay1, disable_gc):
 
         try:
             pyrogue.Root.__init__(self, name='AMCc', description='AMC Carrier')
@@ -382,10 +379,13 @@ class LocalServer(pyrogue.Root):
                 description='Set default configuration',
                 function=self.set_defaults_cmd))
 
-            self.add(pyrogue.LocalCommand(
-                name='runGarbageCollection',
-                description='runGarbageCollection',
-                function=self.run_garbage_collection))
+            # If Garbage collection was disable, add this local variable to allow users
+            # to manually run the garbage collection.
+            if disable_gc:
+                self.add(pyrogue.LocalCommand(
+                    name='runGarbageCollection',
+                    description='runGarbageCollection',
+                    function=self.run_garbage_collection))
 
             self.add(pyrogue.LocalVariable(
                 name='mcetransmitDebug',
@@ -813,6 +813,7 @@ if __name__ == "__main__":
     pcie_dev=Path("/dev/datadev_0")
     disable_bay0=False
     disable_bay1=False
+    disable_gc=False
 
     # Read Arguments
     try:
@@ -820,7 +821,7 @@ if __name__ == "__main__":
             "ha:sp:e:d:nb:f:c:l:u:",
             ["help", "addr=", "server", "pyro=", "epics=", "defaults=", "nopoll",
             "stream-size=", "stream-type=", "commType=", "pcie-rssi-link=", "dump-pvs=",
-            "disable-bay0", "disable-bay1"])
+            "disable-bay0", "disable-bay1", "disable-gc"])
     except getopt.GetoptError:
         usage(sys.argv[0])
         sys.exit()
@@ -868,6 +869,14 @@ if __name__ == "__main__":
             disable_bay0=True
         elif opt in ("--disable-bay1"):
             disable_bay1=True
+        elif opt in ("--disable-gc"):
+            disable_gc=True
+
+    # Disable garbage collection if requested
+    if disable_gc:
+        import gc
+        gc.disable()
+        print("GARBAGE COLLECTION DISABLED")
 
     # kill/save here so we get the epics_prefix tag from the above option parsing
     kill_old_process()
@@ -946,7 +955,8 @@ if __name__ == "__main__":
             stream_pv_type=stream_pv_type,
             pv_dump_file=pv_dump_file,
             disable_bay0=disable_bay0,
-            disable_bay1=disable_bay1)
+            disable_bay1=disable_bay1,
+            disable_gc=disable_gc)
 
     # Stop server
     server.stop()
