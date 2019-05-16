@@ -32,7 +32,7 @@ import rogue.interfaces.stream
 import MceTransmit
 
 PIDFILE = '/tmp/smurf.pid'
-pyrogue_server.py
+
 # Print the usage message
 def usage(name):
     # Number of space of the string "Usage: {name} ". Use to align the following lines.
