@@ -35,12 +35,17 @@ PIDFILE = '/tmp/smurf.pid'
 
 # Print the usage message
 def usage(name):
-    print("Usage: {} -a|--addr IP_address [-d|--defaults config_file]".format(name),\
+    print("Usage: {} [-a|--addr IP_address] [-d|--defaults config_file]".format(name),\
         " [-s|--server] [-p|--pyro group_name] [-e|--epics prefix]",\
         " [-n|--nopoll] [-b|--stream-size byte_size] [-f|--stream-type data_type]",\
-        " [-c|--commType comm_type] [-l|--slot slot_number] [-h|--help]")
+        " [-c|--commType comm_type] [-l|--pcie-rssi-link index] [-b|--stream-size data_size]"\
+        " [-f|--stream-type data_type] [-u|--dump-pvs file_name] [--disable-bay0]"\
+        " [--disable-bay1] [--disable-gc] [-w|--windows-title title] [--pcie-dev pice_device]"\
+        " [-h|--help]")
+    print("")
     print("    -h|--help                  : Show this message")
-    print("    -a|--addr IP_address       : FPGA IP address")
+    print("    -a|--addr IP_address       : FPGA IP address. Required when"\
+        "the communication type is based on Ethernet.")
     print("    -d|--defaults config_file  : Default configuration file")
     print("    -p|--pyro group_name       : Start a Pyro4 server with",\
         "group name \"group_name\"")
@@ -50,7 +55,7 @@ def usage(name):
         "a GUI (Must be used with -p and/or -e)")
     print("    -n|--nopoll                : Disable all polling")
     print("    -c|--commType comm_type    : Communication type with the FPGA",\
-        "(default to \"eth-rssi-non-interleaved\"")
+        "(defaults to \"eth-rssi-non-interleaved\"")
     print("    -l|--pcie-rssi-link index  : PCIe RSSI link (only needed with"\
         "PCIe). Supported values are 0 to 5")
     print("    -b|--stream-size data_size : Expose the stream data as EPICS",\
@@ -69,6 +74,8 @@ def usage(name):
     print("    -w|--windows-title title   : Set the GUI windows title. If not"\
         "specified, the default windows title will be the name of this script."\
         "This value will be ignored when running in server mode.")
+    print("    --pcie-dev pice_device     : Set the PCIe card device name"\
+        "(defaults to '/dev/datadev_0')")
     print("")
     print("Examples:")
     print("    {} -a IP_address                            :".format(name),\
@@ -228,7 +235,7 @@ class LocalServer(pyrogue.Root):
     """
     def __init__(self, ip_addr, config_file, server_mode, group_name, epics_prefix,\
         polling_en, comm_type, pcie_rssi_link, stream_pv_size, stream_pv_type,\
-        pv_dump_file, disable_bay0, disable_bay1, disable_gc, windows_title):
+        pv_dump_file, disable_bay0, disable_bay1, disable_gc, windows_title,pcie_dev):
 
         try:
             pyrogue.Root.__init__(self, name='AMCc', description='AMC Carrier')
@@ -255,6 +262,21 @@ class LocalServer(pyrogue.Root):
             # Add devices
             self.add(fpga)
 
+            # Create stream interfaces
+            self.ddr_streams = []       # DDR streams
+            self.streaming_streams = [] # Streaming interface streams
+
+            # If the packetizer is being used, the FpgaTopLevel class will defined a 'stream' interface exposing it.
+            # Otherwise, we are using DMA engine without packetizer. Create the stream interface accordingly.
+            if hasattr(fpga, 'stream'):
+                for i in range(8):
+                    self.ddr_streams.append(fpga.stream.application(0x80 + i))
+                    self.streaming_streams.append(fpga.stream.application(0xC0 + i))
+            else:
+                for i in range(8):
+                    self.ddr_streams.append(rogue.hardware.axi.AxiStreamDma(pcie_dev,(pcie_rssi_link*0x100 + 0x80 + i), True))
+                    self.streaming_streams.append(rogue.hardware.axi.AxiStreamDma(pcie_dev,(pcie_rssi_link*0x100 + 0xC0 + i), True))
+
             # Our smurf2mce receiver
             # The data stream comes from TDEST 0xC1
             # We use a FIFO between the stream data and the receiver:
@@ -262,14 +284,14 @@ class LocalServer(pyrogue.Root):
             self.smurf2mce = MceTransmit.Smurf2MCE()
             self.smurf2mce.setDebug( False )
             self.smurf2mce_fifo = rogue.interfaces.stream.Fifo(1000,0,True)
-            pyrogue.streamConnect(fpga.stream.application(0xC1), self.smurf2mce_fifo)
+            pyrogue.streamConnect(self.streaming_streams[1], self.smurf2mce_fifo)
             pyrogue.streamConnect(self.smurf2mce_fifo, self.smurf2mce)
 
             # Add data streams (0-7) to file channels (0-7)
             for i in range(8):
 
                 ## DDR streams
-                pyrogue.streamConnect(fpga.stream.application(0x80 + i),
+                pyrogue.streamConnect(self.ddr_streams[i],
                     stm_data_writer.getChannel(i))
 
                 ## Streaming interface streams
@@ -277,11 +299,11 @@ class LocalServer(pyrogue.Root):
                 # We have already connected TDEST 0xC1 to the smurf2mce receiver,
                 # so we need to tapping it to the data writer.
                 if i == 1:
-                    pyrogue.streamTap(fpga.stream.application(0xC0 + i),
+                    pyrogue.streamTap(self.streaming_streams[i],
                         stm_interface_writer.getChannel(i))
                 # The rest of channels are connected directly to the data writer.
                 else:
-                    pyrogue.streamConnect(fpga.stream.application(0xC0 + i),
+                    pyrogue.streamConnect(self.streaming_streams[i],
                         stm_interface_writer.getChannel(i))
 
             # Run control for streaming interfaces
@@ -473,7 +495,7 @@ class LocalServer(pyrogue.Root):
 
                         self.stream_fifos.append(rogue.interfaces.stream.Fifo(1000, fifo_size, True)) # changes
                         self.stream_fifos[i]._setSlave(self.stream_slaves[i])
-                        pyrogue.streamTap(fpga.stream.application(0x80+i), self.stream_fifos[i])
+                        pyrogue.streamTap(self.ddr_streams[i], self.stream_fifos[i])
 
             self.epics.start()
 
@@ -559,7 +581,7 @@ class PcieCard():
     exepction condition.
     """
 
-    def __init__(self, comm_type, link, ip_addr='', dev='/dev/datadev_0'):
+    def __init__(self, comm_type, link, ip_addr, dev):
 
         print("Setting up the RSSI PCIe card...")
 
@@ -847,7 +869,7 @@ if __name__ == "__main__":
     comm_type_valid_types = ["eth-rssi-non-interleaved", "eth-rssi-interleaved", "pcie-rssi-interleaved"]
     pcie_rssi_link=None
     pv_dump_file= ""
-    pcie_dev=Path("/dev/datadev_0")
+    pcie_dev="/dev/datadev_0"
     disable_bay0=False
     disable_bay1=False
     disable_gc=False
@@ -859,7 +881,7 @@ if __name__ == "__main__":
             "ha:sp:e:d:nb:f:c:l:u:w:",
             ["help", "addr=", "server", "pyro=", "epics=", "defaults=", "nopoll",
             "stream-size=", "stream-type=", "commType=", "pcie-rssi-link=", "dump-pvs=",
-            "disable-bay0", "disable-bay1", "disable-gc", "windows-title="])
+            "disable-bay0", "disable-bay1", "disable-gc", "windows-title=", "pcie-dev="])
     except getopt.GetoptError:
         usage(sys.argv[0])
         sys.exit()
@@ -911,6 +933,8 @@ if __name__ == "__main__":
             disable_gc = True
         elif opt in ("-w", "--windows-title"):
             windows_title = arg
+        elif opt in ("--pcie-dev"):
+            pcie_dev = arg
 
 
     # Disable garbage collection if requested
@@ -980,7 +1004,7 @@ if __name__ == "__main__":
         import pyrogue.gui
 
     # The PCIeCard object will take care of setting up the PCIe card (if present)
-    with PcieCard(link=pcie_rssi_link, comm_type=comm_type, ip_addr=ip_addr):
+    with PcieCard(link=pcie_rssi_link, comm_type=comm_type, ip_addr=ip_addr, dev=pcie_dev):
 
         # Start pyRogue server
         server = LocalServer(
@@ -998,7 +1022,8 @@ if __name__ == "__main__":
             disable_bay0=disable_bay0,
             disable_bay1=disable_bay1,
             disable_gc=disable_gc,
-            windows_title=windows_title)
+            windows_title=windows_title,
+            pcie_dev=pcie_dev)
 
     # Stop server
     server.stop()
