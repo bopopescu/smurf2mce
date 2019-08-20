@@ -444,11 +444,31 @@ class LocalServer(pyrogue.Root):
                 pollInterval=1,
                 hidden=False))
 
-            # Command to clear the lost frame counter on smurf2mce
+            # Received frame counter from smurf2mce
+            self.add(pyrogue.LocalVariable(
+                name='frameRxCnt',
+                description='Received frame Counter',
+                mode='RO',
+                value=0,
+                localGet=self.smurf2mce.getFrameRxCnt,
+                pollInterval=1,
+                hidden=False))
+
+            # Out-of-order frame counter from smurf2mce
+            self.add(pyrogue.LocalVariable(
+                name='frameOutOrderCnt',
+                description='Number of time out-of-order frames are detected',
+                mode='RO',
+                value=0,
+                localGet=self.smurf2mce.getFrameOutOrderCnt,
+                pollInterval=1,
+                hidden=False))
+
+            # Command to clear all the frame counters on smurf2mce
             self.add(pyrogue.LocalCommand(
-                name='clearFrameLossCnt',
-                description='Clear the lost frame counter',
-                function=self.smurf2mce.clearFrameLossCnt))
+                name='clearFrameCnt',
+                description='Clear all the frame counters',
+                function=self.smurf2mce.clearFrameCnt))
 
             # Start the root
             if group_name:

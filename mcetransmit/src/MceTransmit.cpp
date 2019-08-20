@@ -55,17 +55,28 @@ class Smurf2MCE : public rogue::interfaces::stream::Slave {
 //! Thread background
   void runThread(const char* endpoint);
 
+  // Received frame counter
+  std::size_t frameRxCnt;
+
   // Lost frame counter
   std::size_t frameLossCnt;
 
+  // Out-of-order frame counter
+  // Counts the number of time we received and
+  // out-of-order frame, not the number of frames
+  // out-of-order
+  std::size_t frameOutOrderCnt;
+
 public:
   uint32_t rxCount, rxBytes, rxLast;
-  uint32_t    getCount()            { return rxCount;         } // Total frames
-  uint32_t    getBytes()            { return rxBytes;         } // Total Bytes
-  uint32_t    getLast()             { return rxLast;          } // Last frame size
-  void        setDebug(bool debug)  { debug_ = debug; return; } // Last frame size
-  std::size_t getFrameLossCnt()     { return frameLossCnt;    } // Get the lost frame counter
-  void        clearFrameLossCnt()   { frameLossCnt = 0;       } // Clear the lost frame counter
+  uint32_t    getCount()            { return rxCount;          } // Total frames
+  uint32_t    getBytes()            { return rxBytes;          } // Total Bytes
+  uint32_t    getLast()             { return rxLast;           } // Last frame size
+  void        setDebug(bool debug)  { debug_ = debug; return;  } // Last frame size
+  std::size_t getFrameRxCnt()       { return frameRxCnt;       } // Get the received frame counter
+  std::size_t getFrameLossCnt()     { return frameLossCnt;     } // Get the lost frame counter
+  std::size_t getFrameOutOrderCnt() { return frameOutOrderCnt; } // Get the lost frame counter
+  void        clearFrameCnt();                                   // Clear all frame counters
 
 
   bool initialized;
@@ -110,12 +121,14 @@ public:
       // Expose methods to python
   static void setup_python() {
          bp::class_<Smurf2MCE, boost::shared_ptr<Smurf2MCE>, bp::bases<ris::Slave>, boost::noncopyable >("Smurf2MCE",bp::init<>())
-            .def("getCount", &Smurf2MCE::getCount)
-            .def("getBytes", &Smurf2MCE::getBytes)
-            .def("getLast",  &Smurf2MCE::getLast)
-            .def("setDebug",  &Smurf2MCE::setDebug)
-            .def("getFrameLossCnt", &Smurf2MCE::getFrameLossCnt)
-            .def("clearFrameLossCnt", &Smurf2MCE::clearFrameLossCnt)
+            .def("getCount",            &Smurf2MCE::getCount)
+            .def("getBytes",            &Smurf2MCE::getBytes)
+            .def("getLast",             &Smurf2MCE::getLast)
+            .def("setDebug",            &Smurf2MCE::setDebug)
+            .def("getFrameRxCnt",       &Smurf2MCE::getFrameRxCnt)
+            .def("getFrameLossCnt",     &Smurf2MCE::getFrameLossCnt)
+            .def("getFrameOutOrderCnt", &Smurf2MCE::getFrameOutOrderCnt)
+            .def("clearFrameCnt",       &Smurf2MCE::clearFrameCnt)
          ;
          bp::implicitly_convertible<boost::shared_ptr<Smurf2MCE>, ris::SlavePtr>();
   };
@@ -138,6 +151,8 @@ Smurf2MCE::Smurf2MCE() : ris::Slave()
   last_frame_counter = 0;
   debug_ = false;
   frameLossCnt = 0;
+  frameRxCnt = 0;
+  frameOutOrderCnt = 0;
 
   C = new SmurfConfig(); // will hold config info - testing for now
   M = new MCEHeader();  // creates a MCE header class
@@ -256,11 +271,21 @@ void Smurf2MCE::runThread(const char* endpoint)
            }
            else
            {
+             // Discard out-of-order frames
+             if ( frameNumber < prevFrameNumber )
+             {
+               ++frameOutOrderCnt;
+               continue;
+             }
+
              // If we are missing frame, add the number of missing frames to the counter
              frameNumberDelta = frameNumber - prevFrameNumber - 1;
              if ( frameNumberDelta )
                frameLossCnt += frameNumberDelta;
            }
+
+           // Update the received frame counter
+           ++frameRxCnt;
 
            if(H->get_test_mode()) T->gen_test_smurf_data(d, H->get_test_mode(), H->get_syncword(), H->get_test_parameter());   // are we using test data, use pointer to data
 
@@ -433,6 +458,14 @@ void Smurf2MCE::frameToBuffer( ris::FramePtr frame, uint8_t * const buffer) {
 
 Smurf2MCE::~Smurf2MCE() // destructor
 {
+}
+
+// Clear the frame counters
+void  Smurf2MCE::clearFrameCnt()
+{
+  frameLossCnt     = 0;
+  frameRxCnt       = 0;
+  frameOutOrderCnt = 0;
 }
 
 // Decodes information in the header part of the data from smurf
