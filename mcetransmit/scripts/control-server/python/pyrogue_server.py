@@ -286,13 +286,19 @@ class LocalServer(pyrogue.Root):
 
             # Our smurf2mce receiver
             # The data stream comes from TDEST 0xC1
-            # We use a FIFO between the stream data and the receiver:
-            # Stream -> FIFO -> smurf2mce receiver
             self.smurf2mce = MceTransmit.Smurf2MCE()
             self.smurf2mce.setDebug( False )
-            self.smurf2mce_fifo = rogue.interfaces.stream.Fifo(1000,0,True)
-            pyrogue.streamConnect(self.streaming_streams[1], self.smurf2mce_fifo)
-            pyrogue.streamConnect(self.smurf2mce_fifo, self.smurf2mce)
+
+            if 'pcie-' in comm_type:
+                # When PCIe communication is used, we connect the stream data directly to the receiver:
+                # Stream -> smurf2mce receiver
+                pyrogue.streamConnect(self.streaming_streams[1], self.smurf2mce)
+            else:
+                # When Ethernet communication is used, We use a FIFO between the stream data and the receiver:
+                # Stream -> FIFO -> smurf2mce receiver
+                self.smurf2mce_fifo = rogue.interfaces.stream.Fifo(1000,0,True)
+                pyrogue.streamConnect(self.streaming_streams[1], self.smurf2mce_fifo)
+                pyrogue.streamConnect(self.smurf2mce_fifo, self.smurf2mce)
 
             # Add data streams (0-7) to file channels (0-7)
             for i in range(8):
