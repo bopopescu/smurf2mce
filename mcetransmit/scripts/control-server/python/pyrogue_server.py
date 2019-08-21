@@ -831,12 +831,12 @@ class PcieCard():
             else:
                 exit_message("  ERROR: Invalid RSSI lane number. Must be between 0 and 5")
 
-        # Should need to check that the IP address is defined when PCIe is present
-        # and not in used, but that is enforce in the main function. We need to
-        # know the IP address so we can look for all RSSI lanes that point to it
-        # and close their connections.
+            # Should need to check that the IP address is defined when PCIe is present
+            # and not in used, but that is enforce in the main function. We need to
+            # know the IP address so we can look for all RSSI lanes that point to it
+            # and close their connections.
 
-        # Not more configuration errors at this point
+            # Not more configuration errors at this point
 
             # Prepare the PCIe (DATA)
             with PcieDev(dev=dev_data, name='pcie_data', description='PCIe for DATA') as pcie:
