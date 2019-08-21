@@ -862,7 +862,6 @@ class PcieCard():
                 # Print FW information
                 pcie.print_version()
 
-
                 # Verify if the PCIe card is configured with a MAC and IP address.
                 # If not, load default values before it can be used.
                 valid_local_mac_addr = True
@@ -914,6 +913,7 @@ class PcieCard():
             print("  - Local IP address:                      : {}".format(local_ip_addr))
             print("  - Using IP address                       : {}".format(self.ip_addr))
             print("  - Using RSSI lane number                 : {}".format(self.lane))
+            print("")
 
         # When the PCIe card is not present we don't do anything
 
