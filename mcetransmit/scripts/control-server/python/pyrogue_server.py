@@ -709,7 +709,7 @@ class PcieDev():
         Print the register for the specified Ethernet lane.
         """
         print("      PCIe register status:")
-        print("      Core.UdpGrp.UdpConfig[{}].EnKeepAlive       = {}".format(lane,
+        print("      Core.UdpGrp.UdpConfig[{}].EnKeepAlive         = {}".format(lane,
             self.root.Core.UdpGrp.UdpConfig[lane].EnKeepAlive.get()))
         print("      Core.UdpGrp.UdpConfig[{}].KeepAliveConfig     = 0x{:02X}".format(lane,
             self.root.Core.UdpGrp.UdpConfig[lane].KeepAliveConfig.get()))
