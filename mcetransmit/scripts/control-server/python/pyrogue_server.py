@@ -641,51 +641,51 @@ class PcieDev():
         """
         Get the local MAC address for the specified Ethernet lane.
         """
-        return self.root.Core.EthLane[lane].EthConfig.LocalMac.get()
+        return self.root.Core.EthPhyGrp.EthConfig[lane].LocalMac.get()
 
     def set_local_mac(self, lane, mac):
         """
         Set the local MAC address for the specified Ethernet lane.
         """
-        return self.root.Core.EthLane[lane].EthConfig.LocalMac.set(mac)
+        return self.root.Core.EthPhyGrp.EthConfig[lane].LocalMac.set(mac)
 
     def get_local_ip(self, lane):
         """
         Get the local IP address for the specified Ethernet lane.
         """
-        return self.root.Core.EthLane[lane].EthConfig.LocalIp.get()
+        return self.root.Core.EthPhyGrp.EthConfig[lane].LocalIp.get()
 
     def set_local_ip(self, lane, ip):
         """
         Set the local IP address for the specified Ethernet lane.
         """
-        return self.root.Core.EthLane[lane].EthConfig.LocalIp.set(ip)
+        return self.root.Core.EthPhyGrp.EthConfig[lane].LocalIp.set(ip)
 
     def get_remote_ip(self, lane, client):
         """
         Get the remote IP address for the specified Ethernet lane.
         """
-        return self.root.Core.EthLane[lane].UdpEngine.ClientRemoteIp[client].get()
+        return self.root.Core.UdpGrp.UdpEngine[lane].ClientRemoteIp[client].get()
 
     def set_remote_ip(self, lane, client, ip):
         """
         Set the remote IP address for the specified Ethernet lane.
         """
-        return self.root.Core.EthLane[lane].UdpEngine.ClientRemoteIp[client].set(ip)
+        return self.root.Core.UdpGrp.UdpEngine[lane].ClientRemoteIp[client].set(ip)
 
     def open_lane(self, lane, ip):
         """
         Open the RSSI connection on the specified lane, using the specified IP address.
         """
         print("    Opening PCIe RSSI lane {}".format(lane))
-        self.root.Core.EthLane[lane].EthConfig.EnKeepAlive.set(1)
-        self.root.Core.EthLane[lane].EthConfig.KeepAliveConfig.set(0x2E90EDD0)  # 5 seconds
-        self.root.Core.EthLane[lane].RssiClient.OpenConn.set(1)
-        self.root.Core.EthLane[lane].RssiClient.CloseConn.set(0)
-        self.root.Core.EthLane[lane].UdpEngine.ClientRemoteIp[0].set(ip)
-        self.root.Core.EthLane[lane].UdpEngine.ClientRemoteIp[1].set(ip)
-        self.root.Core.EthLane[lane].UdpEngine.ClientRemotePort[0].set(8198)
-        self.root.Core.EthLane[lane].UdpEngine.ClientRemotePort[1].set(8195)
+        self.root.Core.UdpGrp.UdpConfig[lane].EnKeepAlive.set(1)
+        self.root.Core.UdpGrp.UdpConfig[lane].KeepAliveConfig.set(0x2E90EDD0)  # 5 seconds
+        self.root.Core.UdpGrp.RssiClient[lane].OpenConn.set(1)
+        self.root.Core.UdpGrp.RssiClient[lane].CloseConn.set(0)
+        self.root.Core.UdpGrp.UdpEngine[lane].ClientRemoteIp[0].set(ip)
+        self.root.Core.UdpGrp.UdpEngine[lane].ClientRemoteIp[1].set(ip)
+        self.root.Core.UdpGrp.UdpEngine[lane].ClientRemotePort[0].set(8198)
+        self.root.Core.UdpGrp.UdpEngine[lane].ClientRemotePort[1].set(8195)
 
         # Print register status after setting them
         self.__print_lane_registers(lane)
@@ -695,11 +695,11 @@ class PcieDev():
         Close the RSSI connection on the specified Ethernet lane.
         """
         print("    Closing PCIe RSSI lane {}".format(lane))
-        self.root.Core.EthLane[lane].EthConfig.EnKeepAlive.set(0)
-        self.root.Core.EthLane[lane].RssiClient.OpenConn.set(0)
-        self.root.Core.EthLane[lane].RssiClient.CloseConn.set(1)
-        self.root.Core.EthLane[lane].UdpEngine.ClientRemotePort[0].set(0)
-        self.root.Core.EthLane[lane].UdpEngine.ClientRemotePort[1].set(8192)
+        self.root.Core.UdpGrp.UdpConfig[lane].KeepAliveConfig.set(0)
+        self.root.Core.UdpGrp.RssiClient[lane].OpenConn.set(0)
+        self.root.Core.UdpGrp.RssiClient[lane].CloseConn.set(1)
+        self.root.Core.UdpGrp.UdpEngine[lane].ClientRemotePort[0].set(0)
+        self.root.Core.UdpGrp.UdpEngine[lane].ClientRemotePort[1].set(8192)
 
         # Print register status after setting them
         self.__print_lane_registers(lane)
@@ -709,26 +709,26 @@ class PcieDev():
         Print the register for the specified Ethernet lane.
         """
         print("      PCIe register status:")
-        print("      Core.EthLane[{}].EthConfig.EnKeepAlive         = {}".format(lane,
-             self.root.Core.EthLane[lane].EthConfig.EnKeepAlive.get()))
-        print("      Core.EthLane[{}].EthConfig.KeepAliveConfig     = 0x{:02X}".format(lane,
-             self.root.Core.EthLane[lane].EthConfig.KeepAliveConfig.get()))
-        print("      Core.EthLane[{}].RssiClient.OpenConn           = {}".format(lane,
-             self.root.Core.EthLane[lane].RssiClient.OpenConn.get()))
-        print("      Core.EthLane[{}].RssiClient.CloseConn          = {}".format(lane,
-             self.root.Core.EthLane[lane].RssiClient.CloseConn.get()))
-        print("      Core.EthLane[{}].UdpEngine.ClientRemotePort[0] = {}".format(lane,
-             self.root.Core.EthLane[lane].UdpEngine.ClientRemotePort[0].get()))
-        print("      Core.EthLane[{}].UdpEngine.ClientRemoteIp[0]   = {}".format(lane,
-             self.root.Core.EthLane[lane].UdpEngine.ClientRemoteIp[0].get()))
-        print("      Core.EthLane[{}].UdpEngine.ClientRemotePort[1] = {}".format(lane,
-             self.root.Core.EthLane[lane].UdpEngine.ClientRemotePort[1].get()))
-        print("      Core.EthLane[{}].UdpEngine.ClientRemoteIp[1]   = {}".format(lane,
-             self.root.Core.EthLane[lane].UdpEngine.ClientRemoteIp[1].get()))
-        print("      Core.EthLane[{}].EthConfig.LocalMac            = {}".format(lane,
-             self.root.Core.EthLane[lane].EthConfig.LocalMac.get()))
-        print("      Core.EthLane[{}].EthConfig.LocalIp             = {}".format(lane,
-             self.root.Core.EthLane[lane].EthConfig.LocalIp.get()))
+        print("      Core.UdpGrp.UdpConfig[{}].EnKeepAlive       = {}".format(lane,
+            self.root.Core.UdpGrp.UdpConfig[lane].EnKeepAlive.get()))
+        print("      Core.UdpGrp.UdpConfig[{}].KeepAliveConfig     = 0x{:02X}".format(lane,
+            self.root.Core.UdpGrp.UdpConfig[lane].KeepAliveConfig.get()))
+        print("      Core.UdpGrp.RssiClient[{}].OpenConn           = {}".format(lane,
+            self.root.Core.UdpGrp.RssiClient[lane].OpenConn.get()))
+        print("      Core.UdpGrp.RssiClient[{}].CloseConn          = {}".format(lane,
+            self.root.Core.UdpGrp.RssiClient[lane].CloseConn.get()))
+        print("      Core.UdpGrp.UdpEngine[{}].ClientRemotePort[0] = {}".format(lane,
+            self.root.Core.UdpGrp.UdpEngine[lane].ClientRemotePort[0].get()))
+        print("      Core.UdpGrp.UdpEngine[{}].ClientRemoteIp[0]   = {}".format(lane,
+            self.root.Core.UdpGrp.UdpEngine[lane].ClientRemoteIp[0].get()))
+        print("      Core.UdpGrp.UdpEngine[{}].ClientRemotePort[1] = {}".format(lane,
+            self.root.Core.UdpGrp.UdpEngine[lane].ClientRemotePort[1].get()))
+        print("      Core.UdpGrp.UdpEngine[{}].ClientRemoteIp[1]   = {}".format(lane,
+            self.root.Core.UdpGrp.UdpEngine[lane].ClientRemoteIp[1].get()))
+        print("      Core.EthPhyGrp.EthConfig[{}].LocalMac         = {}".format(lane,
+            self.root.Core.EthPhyGrp.EthConfig[lane].LocalMac.get()))
+        print("      Core.EthPhyGrp.EthConfig[{}].LocalIp          = {}".format(lane,
+            self.root.Core.EthPhyGrp.EthConfig[lane].LocalIp.get()))
         print("")
 
     def print_version(self):
