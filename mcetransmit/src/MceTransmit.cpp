@@ -131,6 +131,7 @@ public:
             .def("getFrameRxCnt",       &Smurf2MCE::getFrameRxCnt)
             .def("getFrameLossCnt",     &Smurf2MCE::getFrameLossCnt)
             .def("getFrameOutOrderCnt", &Smurf2MCE::getFrameOutOrderCnt)
+            .def("getBadFrameCnt",      &Smurf2MCE::getBadFrameCnt)
             .def("clearFrameCnt",       &Smurf2MCE::clearFrameCnt)
          ;
          bp::implicitly_convertible<boost::shared_ptr<Smurf2MCE>, ris::SlavePtr>();
