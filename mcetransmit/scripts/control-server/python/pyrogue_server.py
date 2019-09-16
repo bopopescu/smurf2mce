@@ -474,6 +474,16 @@ class LocalServer(pyrogue.Root):
                 pollInterval=1,
                 hidden=False))
 
+            # Bad frame counter
+            self.add(pyrogue.LocalVariable(
+                name='badFrameCnt',
+                description='Number of lost frames due to a bad frame',
+                mode='RO',
+                value=0,
+                localGet=self.smurf2mce.getBadFrameCnt,
+                pollInterval=1,
+                hidden=False))
+
             # Command to clear all the frame counters on smurf2mce
             self.add(pyrogue.LocalCommand(
                 name='clearFrameCnt',

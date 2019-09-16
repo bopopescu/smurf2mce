@@ -44,9 +44,13 @@ namespace ris = rogue::interfaces::stream;
 // Smurf2mce definition should be in smurftcp.h, but doesn't work, not sure why
 class Smurf2MCE : public rogue::interfaces::stream::Slave {
 
-  bool debug_;
+  bool           debug_;
   zmq::context_t context;
   zmq::socket_t  socket;
+  uint32_t       prevFrameNumber;
+  uint32_t       frameNumber;
+  std::size_t    frameNumberDelta;
+  bool           firstFrame;
 
   // Received frame counter
   std::size_t frameRxCnt;
@@ -60,10 +64,10 @@ class Smurf2MCE : public rogue::interfaces::stream::Slave {
   // out-of-order
   std::size_t frameOutOrderCnt;
 
-  uint32_t    prevFrameNumber;
-  uint32_t    frameNumber;
-  std::size_t frameNumberDelta;
-  bool        firstFrame;
+  // Bad frame counter
+  // Counts how many frames have been dropped because
+  // of an error in the frame.
+  std::size_t badFrameCnt;
 
 public:
   uint32_t rxCount, rxBytes, rxLast;
@@ -74,6 +78,7 @@ public:
   std::size_t getFrameRxCnt()       { return frameRxCnt;       } // Get the received frame counter
   std::size_t getFrameLossCnt()     { return frameLossCnt;     } // Get the lost frame counter
   std::size_t getFrameOutOrderCnt() { return frameOutOrderCnt; } // Get the lost frame counter
+  std::size_t getBadFrameCnt()      { return badFrameCnt;      } // Get the bad frame counter
   void        clearFrameCnt();                                   // Clear all frame counters
 
 
@@ -155,6 +160,7 @@ Smurf2MCE::Smurf2MCE()
   frameLossCnt = 0;
   frameRxCnt = 0;
   frameOutOrderCnt = 0;
+  badFrameCnt = 0;
 
   C = new SmurfConfig(); // will hold config info - testing for now
   M = new MCEHeader();  // creates a MCE header class
@@ -221,6 +227,7 @@ void Smurf2MCE::acceptFrame( ris::FramePtr frame )
 {
   if ( frame->getError() || (frame->getFlags() & 0x100) )
   {
+    ++badFrameCnt;
     return;
   }
 
@@ -442,6 +449,7 @@ void  Smurf2MCE::clearFrameCnt()
   frameLossCnt     = 0;
   frameRxCnt       = 0;
   frameOutOrderCnt = 0;
+  badFrameCnt      = 0;
 }
 
 // Decodes information in the header part of the data from smurf
