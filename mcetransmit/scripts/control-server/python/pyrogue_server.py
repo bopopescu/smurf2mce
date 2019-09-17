@@ -31,28 +31,20 @@ import pyrogue.utilities.fileio
 import rogue.interfaces.stream
 import MceTransmit
 
-PIDFILE = '/tmp/smurf.pid'
-
 # Print the usage message
 def usage(name):
-    # Number of space of the string "Usage: {name} ". Use to align the following lines.
-    num_spaces=len(name) + 8
-
-    print("Usage: {} [-a|--addr IP_address] [-d|--defaults config_file]".format(name))
-    print("{s: <{c}}[-s|--server] [-p|--pyro group_name] [-e|--epics prefix]".format(s='', c=num_spaces))
-    print("{s: <{c}}[-n|--nopoll] [-b|--stream-size byte_size] [-f|--stream-type data_type]".format(s='', c=num_spaces))
-    print("{s: <{c}}[-c|--commType comm_type] [-l|--pcie-rssi-lane index] [-b|--stream-size data_size]".format(s='', c=num_spaces))
-    print("{s: <{c}}[-f|--stream-type data_type] [-u|--dump-pvs file_name] [--disable-bay0]".format(s='', c=num_spaces))
-    print("{s: <{c}}[--disable-bay1] [--disable-gc] [-w|--windows-title title] [--pcie-dev-rssi pice_device]".format(s='', c=num_spaces))
-    print("{s: <{c}}[--pcie-dev-data pice_device]".format(s='', c=num_spaces))
-    print("{s: <{c}}[-h|--help]".format(s='', c=num_spaces))
+    print("Usage: {}".format(name))
+    print("        [-a|--addr IP_address] [-s|--server] [-e|--epics prefix]")
+    print("        [-n|--nopoll] [-c|--commType comm_type] [-l|--pcie-rssi-lane index]")
+    print("        [-f|--stream-type data_type] [-b|--stream-size byte_size]")
+    print("        [-d|--defaults config_file] [-u|--dump-pvs file_name] [--disable-gc]")
+    print("        [--disable-bay0] [--disable-bay1] [-w|--windows-title title]")
+    print("        [--pcie-dev-rssi pice_device] [--pcie-dev-data pice_device] [-h|--help]")
     print("")
     print("    -h|--help                   : Show this message")
     print("    -a|--addr IP_address        : FPGA IP address. Required when"\
         "the communication type is based on Ethernet.")
     print("    -d|--defaults config_file   : Default configuration file")
-    print("    -p|--pyro group_name        : Start a Pyro4 server with",\
-        "group name \"group_name\"")
     print("    -e|--epics prefix           : Start an EPICS server with",\
         "PV name prefix \"prefix\"")
     print("    -s|--server                 : Server mode, without staring",\
@@ -84,15 +76,15 @@ def usage(name):
         "used for data (defaults to '/dev/datadev_1')")
     print("")
     print("Examples:")
-    print("    {} -a IP_address                            :".format(name),\
-        " Start a local rogue server, with GUI, without Pyro nor EPICS servers")
-    print("    {} -a IP_address -e prefix                  :".format(name),\
-        " Start a local rogue server, with GUI, with EPICS server")
-    print("    {} -a IP_address -e prefix -p group_name -s :".format(name),\
-        " Start a local rogure server, without GUI, with Pyro and EPICS servers")
+    print("    {} -a IP_address              :".format(name),\
+        " Start a local rogue server, with GUI, without an EPICS servers")
+    print("    {} -a IP_address -e prefix    :".format(name),\
+        " Start a local rogue server, with GUI, with and EPICS server")
+    print("    {} -a IP_address -e prefix -s :".format(name),\
+        " Start a local rogue server, without GUI, with an EPICS servers")
     print("")
 
-# Cretae gui interface
+# Create gui interface
 def create_gui(root, title=""):
     app_top = pyrogue.gui.application(sys.argv)
     app_top.setApplicationName(title)
@@ -114,132 +106,11 @@ def exit_message(message):
     print("")
     exit()
 
-# Get the hostname of this PC
-def get_host_name():
-    return subprocess.check_output("hostname").strip().decode("utf-8")
-
-class DataBuffer(rogue.interfaces.stream.Slave):
-    """
-    Data buffer class use to capture data comming from the stream FIFO \
-    and copy it into a local buffer using a especific data format.
-    """
-    def __init__(self, size, data_type):
-        rogue.interfaces.stream.Slave.__init__(self)
-        self._buf = [0] * size
-
-        # Supported data format and byte order
-        self._data_format_dict = {
-            'B': 'unsigned 8-bit',
-            'b': 'signed 8-bit',
-            'H': 'unsigned 16-bit',
-            'h': 'signed 16-bit',
-            'I': 'unsigned 32-bit',
-            'i': 'signed 32-bit'}
-
-        self._data_byte_order_dict = {
-            '<': 'little-endian',
-            '>': 'big-endian'}
-
-        # Get data format and size from data type
-        if data_type == 'UInt16':
-            self._data_format = 'H'
-            self._data_size = 2
-        elif data_type == 'Int16':
-            self._data_format = 'h'
-            self._data_size = 2
-        elif data_type == 'UInt32':
-            self._data_format = 'I'
-            self._data_size = 4
-        else:
-            self._data_format = 'i'
-            self._data_size = 4
-
-        # Byte order: LE
-        self._data_byte_order = '<'
-
-        # Callback function
-        self._callback = lambda: None
-
-    def _acceptFrame(self, frame):
-        """
-        This method is called when a stream frame is received
-        """
-        data = bytearray(frame.getPayload())
-        frame.read(data, 0)
-        self._buf = struct.unpack('{}{}{}'.format((self._data_byte_order, \
-            (len(data)//self._data_size), self._data_format), data))
-        self._callback()
-
-    def set_callback(self, callback):
-        """
-        Function to set the callback function
-        """
-        self._callback = callback
-
-    def read(self):
-        """
-        Function to read the data buffer
-        """
-        return self._buf
-
-    def get_data_format_string(self):
-        """
-        Function to get the current format string
-        """
-        return '{}{}'.format(self._data_byte_order, self._data_format)
-
-    def get_data_format_list(self):
-        """
-        Function to get a list of supported data formats
-        """
-        return list(self._data_format_dict.values())
-
-    def get_data_byte_order_list(self):
-        """
-        Function to get a list of supported data byte order options
-        """
-        return list(self._data_byte_order_dict.values())
-
-    def set_data_format(self, dev, var, value):
-        """
-        Function to set the data format
-        """
-        if (value < len(self._data_format_dict)):
-            data_format = (list(self._data_format_dict)[value])
-            if data_format == 'B' or data_format == 'b':      # uint8, int8
-                self._data_format = data_format
-                self._data_size = 1
-            elif data_format == 'H' or  data_format == 'h':     # uint16, int16
-                self._data_format = data_format
-                self._data_size = 2
-            elif data_format == 'I' or data_format == 'i':    # uint32, int32
-                self._data_format = data_format
-                self._data_size = 4
-
-    def get_data_format(self):
-        """
-        Function to read the data format
-        """
-        return list(self._data_format_dict).index(self._data_format)
-
-    def set_data_byte_order(self, dev, var, value):
-        """
-        Function to set the data byte order
-        """
-        if (value < len(self._data_byte_order_dict)):
-            self._data_byte_order = list(self._data_byte_order_dict)[value]
-
-    def get_data_byte_order(self):
-        """
-        Function to read the data byte order
-        """
-        return list(self._data_byte_order_dict).index(self._data_byte_order)
-
 class LocalServer(pyrogue.Root):
     """
     Local Server class. This class configure the whole rogue application.
     """
-    def __init__(self, ip_addr, config_file, server_mode, group_name, epics_prefix,\
+    def __init__(self, ip_addr, config_file, server_mode, epics_prefix,\
         polling_en, comm_type, pcie_rssi_lane, stream_pv_size, stream_pv_type,\
         pv_dump_file, disable_bay0, disable_bay1, disable_gc, windows_title,\
         pcie_dev_rssi, pcie_dev_data):
@@ -271,18 +142,23 @@ class LocalServer(pyrogue.Root):
 
             # Create stream interfaces
             self.ddr_streams = []       # DDR streams
-            self.streaming_streams = [] # Streaming interface streams
 
             # If the packetizer is being used, the FpgaTopLevel class will defined a 'stream' interface exposing it.
             # Otherwise, we are using DMA engine without packetizer. Create the stream interface accordingly.
+            # We are only using the first 2 channel of each AMC daughter card, i.e. channels 0, 1, 4, 5.
             if hasattr(fpga, 'stream'):
-                for i in range(8):
+                for i in [0, 1, 4, 5]:
                     self.ddr_streams.append(fpga.stream.application(0x80 + i))
-                    self.streaming_streams.append(fpga.stream.application(0xC0 + i))
+
+                # Streaming interface stream
+                self.streaming_stream = fpga.stream.application(0xC1)
+
             else:
-                for i in range(8):
+                for i in [0, 1, 4, 5]:
                     self.ddr_streams.append(rogue.hardware.axi.AxiStreamDma(pcie_dev_rssi,(pcie_rssi_lane*0x100 + 0x80 + i), True))
-                    self.streaming_streams.append(rogue.hardware.axi.AxiStreamDma(pcie_dev_data,(pcie_rssi_lane*0x100 + 0xC0 + i), True))
+
+                # Streaming interface stream
+                self.streaming_stream = rogue.hardware.axi.AxiStreamDma(pcie_dev_data,(pcie_rssi_lane*0x100 + 0xC1), True)
 
             # Our smurf2mce receiver
             # The data stream comes from TDEST 0xC1
@@ -292,32 +168,25 @@ class LocalServer(pyrogue.Root):
             if 'pcie-' in comm_type:
                 # When PCIe communication is used, we connect the stream data directly to the receiver:
                 # Stream -> smurf2mce receiver
-                pyrogue.streamConnect(self.streaming_streams[1], self.smurf2mce)
+                pyrogue.streamConnect(self.streaming_stream, self.smurf2mce)
             else:
                 # When Ethernet communication is used, We use a FIFO between the stream data and the receiver:
                 # Stream -> FIFO -> smurf2mce receiver
                 self.smurf2mce_fifo = rogue.interfaces.stream.Fifo(1000,0,True)
-                pyrogue.streamConnect(self.streaming_streams[1], self.smurf2mce_fifo)
+                pyrogue.streamConnect(self.streaming_stream, self.smurf2mce_fifo)
                 pyrogue.streamConnect(self.smurf2mce_fifo, self.smurf2mce)
 
-            # Add data streams (0-7) to file channels (0-7)
-            for i in range(8):
+            # Add data streams (0-3) to file channels (0-3)
+            for i in range(4):
 
                 ## DDR streams
                 pyrogue.streamConnect(self.ddr_streams[i],
                     stm_data_writer.getChannel(i))
 
-                ## Streaming interface streams
-
-                # We have already connected TDEST 0xC1 to the smurf2mce receiver,
-                # so we need to tapping it to the data writer.
-                if i == 1:
-                    pyrogue.streamTap(self.streaming_streams[i],
-                        stm_interface_writer.getChannel(i))
-                # The rest of channels are connected directly to the data writer.
-                else:
-                    pyrogue.streamConnect(self.streaming_streams[i],
-                        stm_interface_writer.getChannel(i))
+            ## Streaming interface streams
+            # We have already connected TDEST 0xC1 to the smurf2mce receiver,
+            # so we need to tapping it to the data writer.
+            pyrogue.streamTap(self.streaming_stream, stm_interface_writer.getChannel(0))
 
             # Run control for streaming interfaces
             self.add(pyrogue.RunControl(
@@ -328,92 +197,6 @@ class LocalServer(pyrogue.Root):
                     1:  '1 Hz',
                     10: '10 Hz',
                     30: '30 Hz'}))
-
-            # PVs for stream data, used on PCAS-based EPICS server
-            if epics_prefix and stream_pv_size:
-                if use_pcas:
-
-                    print("Enabling stream data on PVs (buffer size = {} points, data type = {})"\
-                        .format(stream_pv_size,stream_pv_type))
-
-                    # Add data streams (0-7) to local variables so they are expose as PVs
-                    # Also add PVs to select the data format
-                    self.stream_fifos = []
-                    self.data_buffers = []
-                    for i in range(8):
-
-                        # Calculate number of bytes needed on the fifo
-                        if '16' in stream_pv_type:
-                            fifo_size = stream_pv_size * 2
-                        else:
-                            fifo_size = stream_pv_size * 4
-
-                        # Setup a FIFO tapped to the steram data and a Slave data buffer
-                        # Local variables will talk to the data buffer directly.
-                        self.stream_fifos.append(rogue.interfaces.stream.Fifo(0, fifo_size, 0))
-                        stream_fifo = self.stream_fifos[i]
-
-                        self.data_buffers.append(DataBuffer(size=stream_pv_size, data_type=stream_pv_type))
-                        data_buffer = self.data_buffers[i]
-
-                        stream_fifo._setSlave(data_buffer)
-
-                        #pyrogue.streamTap(fpga.stream.application(0x80 + i), stream_fifo)
-
-                        # Variable to read the stream data
-                        stream_var = pyrogue.LocalVariable(
-                            name='Stream{}'.format(i),
-                            description='Stream {}'.format(i),
-                            mode='RO',
-                            value=0,
-                            localGet=data_buffer.read,
-                            update=False,
-                            hidden=True)
-
-                        # Set the buffer callback to update the variable
-                        data_buffer.set_callback(stream_var.updated)
-
-                        # Variable to set the data format
-                        data_format_var = pyrogue.LocalVariable(
-                            name='StreamDataFormat{}'.format(i),
-                            description='Type of data being unpacked',
-                            mode='RW',
-                            value=0,
-                            enum={i:j for i,j in enumerate(data_buffer.get_data_format_list())},
-                            localSet=data_buffer.set_data_format,
-                            localGet=data_buffer.get_data_format,
-                            hidden=True)
-
-                        # Variable to set the data byte order
-                        byte_order_var = pyrogue.LocalVariable(
-                            name='StreamDataByteOrder{}'.format(i),
-                            description='Byte order of data being unpacked',
-                            mode='RW',
-                            value=0,
-                            enum={i:j for i,j in enumerate(data_buffer.get_data_byte_order_list())},
-                            localSet=data_buffer.set_data_byte_order,
-                            localGet=data_buffer.get_data_byte_order,
-                            hidden=True)
-
-                        # Variable to read the data format string
-                        format_string_var = pyrogue.LocalVariable(
-                            name='StreamDataFormatString{}'.format(i),
-                            description='Format string used to unpack the data',
-                            mode='RO',
-                            value=0,
-                            localGet=data_buffer.get_data_format_string,
-                            hidden=True)
-
-                        # Add listener to update the format string readback variable
-                        # when the data format or data byte order is changed
-                        data_format_var.addListener(format_string_var)
-                        byte_order_var.addListener(format_string_var)
-
-                        # Add the local variable to self
-                        self.add(stream_var)
-                        self.add(data_format_var)
-                        self.add(byte_order_var)
-                        self.add(format_string_var)
 
             # lcaPut limits the maximun lenght of a string to 40 chars, as defined
             # in the EPICS R3.14 CA reference manual. This won't allowed to use the
@@ -491,15 +274,8 @@ class LocalServer(pyrogue.Root):
                 function=self.smurf2mce.clearFrameCnt))
 
             # Start the root
-            if group_name:
-                # Start with Pyro4 server
-                host_name = get_host_name()
-                print("Starting rogue server with Pyro using group name \"{}\"".format(group_name))
-                self.start(pollEn=polling_en, pyroGroup=group_name, pyroHost=host_name, pyroNs=None)
-            else:
-                # Start without Pyro4 server
-                print("Starting rogue server")
-                self.start(pollEn=polling_en)
+            print("Starting rogue server")
+            self.start(pollEn=polling_en)
 
             self.ReadAll()
 
@@ -527,36 +303,32 @@ class LocalServer(pyrogue.Root):
         if epics_prefix:
             print("Starting EPICS server using prefix \"{}\"".format(epics_prefix))
 
-            # Choose the appropiate epics module:
-            if use_pcas:
-                self.epics = pyrogue.epics.EpicsCaServer(base=epics_prefix, root=self)
-            else:
-                self.epics = pyrogue.protocols.epics.EpicsCaServer(base=epics_prefix, root=self)
+            self.epics = pyrogue.protocols.epics.EpicsCaServer(base=epics_prefix, root=self)
 
-                # PVs for stream data, used on GDD-based EPICS server
-                if stream_pv_size:
+            # PVs for stream data
+            if stream_pv_size:
 
-                    print("Enabling stream data on PVs (buffer size = {} points, data type = {})"\
-                        .format(stream_pv_size,stream_pv_type))
+                print("Enabling stream data on PVs (buffer size = {} points, data type = {})"\
+                    .format(stream_pv_size,stream_pv_type))
 
-                    self.stream_fifos  = []
-                    self.stream_slaves = []
-                    for i in range(8):
-                        self.stream_slaves.append(self.epics.createSlave(name="AMCc:Stream{}".format(i), maxSize=stream_pv_size, type=stream_pv_type))
+                self.stream_fifos  = []
+                self.stream_slaves = []
+                for i in range(4):
+                    self.stream_slaves.append(self.epics.createSlave(name="AMCc:Stream{}".format(i), maxSize=stream_pv_size, type=stream_pv_type))
 
-                        # Calculate number of bytes needed on the fifo
-                        if '16' in stream_pv_type:
-                            fifo_size = stream_pv_size * 2
-                        else:
-                            fifo_size = stream_pv_size * 4
+                    # Calculate number of bytes needed on the fifo
+                    if '16' in stream_pv_type:
+                        fifo_size = stream_pv_size * 2
+                    else:
+                        fifo_size = stream_pv_size * 4
 
-                        self.stream_fifos.append(rogue.interfaces.stream.Fifo(1000, fifo_size, True)) # changes
-                        self.stream_fifos[i]._setSlave(self.stream_slaves[i])
-                        pyrogue.streamTap(self.ddr_streams[i], self.stream_fifos[i])
+                    self.stream_fifos.append(rogue.interfaces.stream.Fifo(1000, fifo_size, True)) # changes
+                    self.stream_fifos[i]._setSlave(self.stream_slaves[i])
+                    pyrogue.streamTap(self.ddr_streams[i], self.stream_fifos[i])
 
             self.epics.start()
 
-            # Dump the PV list to the especified file
+            # Dump the PV list to the specified file
             if pv_dump_file:
                 try:
                     # Try to open the output file
@@ -960,35 +732,9 @@ class PcieCard():
                 print("  Done!")
                 print("")
 
-def kill_old_process():
-    try:
-        finp = open(PIDFILE)
-        pid = int(finp.readlines()[0][:-1])
-        finp.close()
-        cmd = "kill -9 %d" % pid
-        os.system(cmd)
-        print(' ')
-        print(' ')
-        print(' ')
-        print(' ')
-        print(' SMURF already running: killing pid=', str(pid), ' at ', str(time.ctime()))
-        print(' ')
-        print(' ')
-        print(' ')
-        print(' ')
-    except:
-        pass
-
-def save_pid():
-    """ save pid for later killing """
-    fpid = open(PIDFILE, 'w')
-    fpid.write("%d\n" % os.getpid() )
-    fpid.close()
-
 # Main body
 if __name__ == "__main__":
     ip_addr = ""
-    group_name = ""
     epics_prefix = ""
     config_file = ""
     server_mode = False
@@ -1007,11 +753,22 @@ if __name__ == "__main__":
     disable_gc=False
     windows_title=""
 
+    # Only Rogue version >= 2.6.0 are supported. Before this version the EPICS
+    # interface was based on PCAS which is not longer supported.
+    try:
+        ver = pyrogue.__version__
+        if (version.parse(ver) <= version.parse('2.6.0')):
+            raise ImportError('Rogue version <= 2.6.0 is unsupported')
+    except AttributeError:
+        print("Error when trying to get the version of Rogue")
+        pritn("Only version of Rogue > 2.6.0 are supported")
+        raise
+
     # Read Arguments
     try:
         opts, _ = getopt.getopt(sys.argv[1:],
-            "ha:sp:e:d:nb:f:c:l:u:w:",
-            ["help", "addr=", "server", "pyro=", "epics=", "defaults=", "nopoll",
+            "ha:se:d:nb:f:c:l:u:w:",
+            ["help", "addr=", "server", "epics=", "defaults=", "nopoll",
             "stream-size=", "stream-type=", "commType=", "pcie-rssi-lane=", "dump-pvs=",
             "disable-bay0", "disable-bay1", "disable-gc", "windows-title=", "pcie-dev-rssi=",
             "pcie-dev-data="])
@@ -1027,11 +784,8 @@ if __name__ == "__main__":
             ip_addr = arg
         elif opt in ("-s", "--server"):      # Server mode
             server_mode = True
-        elif opt in ("-p", "--pyro"):        # Pyro group name
-            group_name = arg
         elif opt in ("-e", "--epics"):       # EPICS prefix
             epics_prefix = arg
-            PIDFILE = '/tmp/smurf_%s.pid'%epics_prefix
         elif opt in ("-n", "--nopoll"):      # Disable all polling
             polling_en = False
         elif opt in ("-b", "--stream-size"): # Stream data size (on PVs)
@@ -1077,10 +831,6 @@ if __name__ == "__main__":
         gc.disable()
         print("GARBAGE COLLECTION DISABLED")
 
-    # kill/save here so we get the epics_prefix tag from the above option parsing
-    kill_old_process()
-    save_pid()
-
     # Verify if IP address is valid
     if ip_addr:
         try:
@@ -1103,10 +853,10 @@ if __name__ == "__main__":
         except subprocess.CalledProcessError:
            exit_message("    ERROR: FPGA can't be reached!")
 
-    if server_mode and not (group_name or epics_prefix):
-        exit_message("    ERROR: Can not start in server mode without Pyro or EPICS server")
+    if server_mode and not (epics_prefix):
+        exit_message("    ERROR: Can not start in server mode without the EPICS server enabled")
 
-    # Try to import the FpgaTopLevel defintion
+    # Try to import the FpgaTopLevel definition
     try:
         from FpgaTopLevel import FpgaTopLevel
     except ImportError as ie:
@@ -1115,23 +865,7 @@ if __name__ == "__main__":
 
     # If EPICS server is enable, import the epics module
     if epics_prefix:
-        # Choose the appropiate epics module:
-        #  - until version 2.6.0 rogue uses PCASpy
-        #  - later versions use GDD
-        use_pcas = True
-        try:
-            ver = pyrogue.__version__
-            if (version.parse(ver) > version.parse('2.6.0')):
-                use_pcas = False
-        except AttributeError:
-            pass
-
-        if use_pcas:
-            print("Using PCAS-based EPICS server")
-            import pyrogue.epics
-        else:
-            print("Using GDD-based EPICS server")
-            import pyrogue.protocols.epics
+        import pyrogue.protocols.epics
 
     # Import the QT and gui modules if not in server mode
     if not server_mode:
@@ -1146,7 +880,6 @@ if __name__ == "__main__":
             ip_addr=ip_addr,
             config_file=config_file,
             server_mode=server_mode,
-            group_name=group_name,
             epics_prefix=epics_prefix,
             polling_en=polling_en,
             comm_type=comm_type,
@@ -1163,7 +896,5 @@ if __name__ == "__main__":
 
     # Stop server
     server.stop()
-
-    os.remove(PIDFILE)
 
     print("")
