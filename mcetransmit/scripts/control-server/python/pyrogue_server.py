@@ -31,8 +31,6 @@ import pyrogue.utilities.fileio
 import rogue.interfaces.stream
 import MceTransmit
 
-PIDFILE = '/tmp/smurf.pid'
-
 # Print the usage message
 def usage(name):
     print("Usage: {}".format(name))
@@ -851,31 +849,6 @@ class PcieCard():
                 print("  Done!")
                 print("")
 
-def kill_old_process():
-    try:
-        finp = open(PIDFILE)
-        pid = int(finp.readlines()[0][:-1])
-        finp.close()
-        cmd = "kill -9 %d" % pid
-        os.system(cmd)
-        print(' ')
-        print(' ')
-        print(' ')
-        print(' ')
-        print(' SMURF already running: killing pid=', str(pid), ' at ', str(time.ctime()))
-        print(' ')
-        print(' ')
-        print(' ')
-        print(' ')
-    except:
-        pass
-
-def save_pid():
-    """ save pid for later killing """
-    fpid = open(PIDFILE, 'w')
-    fpid.write("%d\n" % os.getpid() )
-    fpid.close()
-
 # Main body
 if __name__ == "__main__":
     ip_addr = ""
@@ -930,7 +903,6 @@ if __name__ == "__main__":
             server_mode = True
         elif opt in ("-e", "--epics"):       # EPICS prefix
             epics_prefix = arg
-            PIDFILE = '/tmp/smurf_%s.pid'%epics_prefix
         elif opt in ("-n", "--nopoll"):      # Disable all polling
             polling_en = False
         elif opt in ("-b", "--stream-size"): # Stream data size (on PVs)
@@ -975,10 +947,6 @@ if __name__ == "__main__":
         import gc
         gc.disable()
         print("GARBAGE COLLECTION DISABLED")
-
-    # kill/save here so we get the epics_prefix tag from the above option parsing
-    kill_old_process()
-    save_pid()
 
     # Verify if IP address is valid
     if ip_addr:
@@ -1045,7 +1013,5 @@ if __name__ == "__main__":
 
     # Stop server
     server.stop()
-
-    os.remove(PIDFILE)
 
     print("")
