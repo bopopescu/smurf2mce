@@ -36,12 +36,12 @@ PIDFILE = '/tmp/smurf.pid'
 # Print the usage message
 def usage(name):
     print("Usage: {}".format(name))
-    print("    [-a|--addr IP_address] [-s|--server] [-e|--epics prefix]")
-    print("    [-n|--nopoll] [-c|--commType comm_type] [-l|--pcie-rssi-lane index]")
-    print("    [-f|--stream-type data_type] [-b|--stream-size byte_size]")
-    print("    [-d|--defaults config_file] [-u|--dump-pvs file_name] [--disable-gc]")
-    print("    [--disable-bay0] [--disable-bay1] [-w|--windows-title title]")
-    print("    [--pcie-dev-rssi pice_device] [--pcie-dev-data pice_device] [-h|--help]")
+    print("        [-a|--addr IP_address] [-s|--server] [-e|--epics prefix]")
+    print("        [-n|--nopoll] [-c|--commType comm_type] [-l|--pcie-rssi-lane index]")
+    print("        [-f|--stream-type data_type] [-b|--stream-size byte_size]")
+    print("        [-d|--defaults config_file] [-u|--dump-pvs file_name] [--disable-gc]")
+    print("        [--disable-bay0] [--disable-bay1] [-w|--windows-title title]")
+    print("        [--pcie-dev-rssi pice_device] [--pcie-dev-data pice_device] [-h|--help]")
     print("")
     print("    -h|--help                   : Show this message")
     print("    -a|--addr IP_address        : FPGA IP address. Required when"\
