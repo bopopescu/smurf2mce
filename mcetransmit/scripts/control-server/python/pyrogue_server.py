@@ -80,11 +80,11 @@ def usage(name):
         "used for data (defaults to '/dev/datadev_1')")
     print("")
     print("Examples:")
-    print("    {} -a IP_address                            :".format(name),\
+    print("    {} -a IP_address              :".format(name),\
         " Start a local rogue server, with GUI, without an EPICS servers")
-    print("    {} -a IP_address -e prefix                  :".format(name),\
+    print("    {} -a IP_address -e prefix    :".format(name),\
         " Start a local rogue server, with GUI, with and EPICS server")
-    print("    {} -a IP_address -e prefix -s               :".format(name),\
+    print("    {} -a IP_address -e prefix -s :".format(name),\
         " Start a local rogue server, without GUI, with an EPICS servers")
     print("")
 
