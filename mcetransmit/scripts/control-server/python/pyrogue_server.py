@@ -38,11 +38,11 @@ def usage(name):
     # Number of space of the string "Usage: {name} ". Use to align the following lines.
     num_spaces=len(name) + 8
 
-    print("Usage: {} [-a|--addr IP_address] [-d|--defaults config_file]".format(name))
-    print("{s: <{c}}[-s|--server] [-e|--epics prefix] [-n|--nopoll] [-b|--stream-size byte_size]".format(s='', c=num_spaces))
-    print("{s: <{c}}[-f|--stream-type data_type] [-c|--commType comm_type] [-l|--pcie-rssi-lane index]".format(s='', c=num_spaces))
-    print("{s: <{c}}[-b|--stream-size data_size] [-f|--stream-type data_type] [-u|--dump-pvs file_name]".format(s='', c=num_spaces))
-    print("{s: <{c}}[--disable-bay0] [--disable-bay1] [--disable-gc] [-w|--windows-title title]".format(s='', c=num_spaces))
+    print("Usage: {} [-a|--addr IP_address] [-s|--server] [-e|--epics prefix]".format(name))
+    print("{s: <{c}}[-n|--nopoll] [-c|--commType comm_type] [-l|--pcie-rssi-lane index]".format(s='', c=num_spaces))
+    print("{s: <{c}}[-f|--stream-type data_type] [-b|--stream-size byte_size]".format(s='', c=num_spaces))
+    print("{s: <{c}}[-d|--defaults config_file] [-u|--dump-pvs file_name] [--disable-gc]".format(s='', c=num_spaces))
+    print("{s: <{c}}[--disable-bay0] [--disable-bay1] [-w|--windows-title title]".format(s='', c=num_spaces))
     print("{s: <{c}}[--pcie-dev-rssi pice_device] [--pcie-dev-data pice_device] [-h|--help]".format(s='', c=num_spaces))
     print("")
     print("    -h|--help                   : Show this message")
@@ -84,7 +84,7 @@ def usage(name):
         " Start a local rogue server, with GUI, without an EPICS servers")
     print("    {} -a IP_address -e prefix                  :".format(name),\
         " Start a local rogue server, with GUI, with and EPICS server")
-    print("    {} -a IP_address -e prefix -s :".format(name),\
+    print("    {} -a IP_address -e prefix -s               :".format(name),\
         " Start a local rogue server, without GUI, with an EPICS servers")
     print("")
 
