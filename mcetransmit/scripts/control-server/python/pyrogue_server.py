@@ -271,18 +271,22 @@ class LocalServer(pyrogue.Root):
 
             # Create stream interfaces
             self.ddr_streams = []       # DDR streams
-            self.streaming_streams = [] # Streaming interface streams
 
             # If the packetizer is being used, the FpgaTopLevel class will defined a 'stream' interface exposing it.
             # Otherwise, we are using DMA engine without packetizer. Create the stream interface accordingly.
             if hasattr(fpga, 'stream'):
                 for i in range(8):
                     self.ddr_streams.append(fpga.stream.application(0x80 + i))
-                    self.streaming_streams.append(fpga.stream.application(0xC0 + i))
+
+                # Streaming interface stream
+                self.streaming_stream = fpga.stream.application(0xC1)
+
             else:
                 for i in range(8):
                     self.ddr_streams.append(rogue.hardware.axi.AxiStreamDma(pcie_dev_rssi,(pcie_rssi_lane*0x100 + 0x80 + i), True))
-                    self.streaming_streams.append(rogue.hardware.axi.AxiStreamDma(pcie_dev_data,(pcie_rssi_lane*0x100 + 0xC0 + i), True))
+
+                # Streaming interface stream
+                self.streaming_stream = rogue.hardware.axi.AxiStreamDma(pcie_dev_data,(pcie_rssi_lane*0x100 + 0xC1), True)
 
             # Our smurf2mce receiver
             # The data stream comes from TDEST 0xC1
@@ -292,12 +296,12 @@ class LocalServer(pyrogue.Root):
             if 'pcie-' in comm_type:
                 # When PCIe communication is used, we connect the stream data directly to the receiver:
                 # Stream -> smurf2mce receiver
-                pyrogue.streamConnect(self.streaming_streams[1], self.smurf2mce)
+                pyrogue.streamConnect(self.streaming_stream, self.smurf2mce)
             else:
                 # When Ethernet communication is used, We use a FIFO between the stream data and the receiver:
                 # Stream -> FIFO -> smurf2mce receiver
                 self.smurf2mce_fifo = rogue.interfaces.stream.Fifo(1000,0,True)
-                pyrogue.streamConnect(self.streaming_streams[1], self.smurf2mce_fifo)
+                pyrogue.streamConnect(self.streaming_stream, self.smurf2mce_fifo)
                 pyrogue.streamConnect(self.smurf2mce_fifo, self.smurf2mce)
 
             # Add data streams (0-7) to file channels (0-7)
@@ -307,17 +311,10 @@ class LocalServer(pyrogue.Root):
                 pyrogue.streamConnect(self.ddr_streams[i],
                     stm_data_writer.getChannel(i))
 
-                ## Streaming interface streams
-
-                # We have already connected TDEST 0xC1 to the smurf2mce receiver,
-                # so we need to tapping it to the data writer.
-                if i == 1:
-                    pyrogue.streamTap(self.streaming_streams[i],
-                        stm_interface_writer.getChannel(i))
-                # The rest of channels are connected directly to the data writer.
-                else:
-                    pyrogue.streamConnect(self.streaming_streams[i],
-                        stm_interface_writer.getChannel(i))
+            ## Streaming interface streams
+            # We have already connected TDEST 0xC1 to the smurf2mce receiver,
+            # so we need to tapping it to the data writer.
+            pyrogue.streamTap(self.streaming_stream, stm_interface_writer.getChannel(0))
 
             # Run control for streaming interfaces
             self.add(pyrogue.RunControl(
