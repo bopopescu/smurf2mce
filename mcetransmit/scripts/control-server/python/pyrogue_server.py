@@ -225,7 +225,7 @@ class LocalServer(pyrogue.Root):
 
                 # When Ethernet communication is used, We use a FIFO between the stream data and the receiver:
                 # Stream -> FIFO -> smurf2mce receiver
-                self.smurf2mce_fifo = rogue.interfaces.stream.Fifo(1000,0,True)
+                self.smurf2mce_fifo = rogue.interfaces.stream.Fifo(100000,0,True)
                 pyrogue.streamConnect(self.streaming_stream, self.smurf2mce_fifo)
                 pyrogue.streamConnect(self.smurf2mce_fifo, self.smurf2mce)
 
