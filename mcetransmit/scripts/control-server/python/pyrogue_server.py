@@ -578,12 +578,14 @@ class PcieCard():
         # Check if the PCIe card for RSSI is present in the system
         if Path(dev_rssi).exists():
             self.pcie_rssi_present = True
+            self.pcie_rssi = PcieDev(dev=dev_rssi, name='pcie_rssi', description='PCIe for RSSI')
         else:
             self.pcie_rssi_present = False
 
         # Check if the PCIe card for DATA is present in the system
         if Path(dev_data).exists():
             self.pcie_data_present = True
+            self.pcie_data = PcieDev(dev=dev_data, name='pcie_data', description='PCIe for DATA')
         else:
             self.pcie_data_present = False
 
@@ -593,10 +595,16 @@ class PcieCard():
         else:
             self.use_pcie = False
 
+        # We need the IP address when the PCIe card is present, but not in used too.
+        # If the PCIe card is present, this value could be updated later.
+        # We need to know the IP address so we can look for all RSSI lanes that point
+        # to it and close their connections.
+        self.ip_addr = ip_addr
+
         # Look for configuration errors:
 
         if self.use_pcie:
-            # Check if we are trying to use PCIe communication without the Pcie
+            # Check if we are trying to use PCIe communication without the PCIe
             # cards present in the system
             if not self.pcie_rssi_present:
                 exit_message("  ERROR: PCIe device {} not present.".format(dev_rssi))
@@ -613,15 +621,13 @@ class PcieCard():
             else:
                 exit_message("  ERROR: Invalid RSSI lane number. Must be between 0 and 5")
 
-            # Should need to check that the IP address is defined when PCIe is present
-            # and not in used, but that is enforce in the main function. We need to
-            # know the IP address so we can look for all RSSI lanes that point to it
-            # and close their connections.
+            # We should need to check that the IP address is defined when PCIe is present
+            # and not in used, but that is enforce in the main function.
 
             # Not more configuration errors at this point
 
             # Prepare the PCIe (DATA)
-            with PcieDev(dev=dev_data, name='pcie_data', description='PCIe for DATA') as pcie:
+            with self.pcie_data as pcie:
                 # Verify that its DeviceID is correct
                 dev_data_id = pcie.get_id()
                 if dev_data_id != 1:
@@ -633,7 +639,6 @@ class PcieCard():
 
 
             # Prepare the PCIe (RSSI)
-            self.pcie_rssi = PcieDev(dev=dev_rssi, name='pcie_rssi', description='PCIe for RSSI')
             with self.pcie_rssi as pcie:
                 # Verify that its DeviceID is correct
                 dev_rssi_id = pcie.get_id()
@@ -700,19 +705,31 @@ class PcieCard():
         # When the PCIe card is not present we don't do anything
 
     def __enter__(self):
-        # Close all RSSI lanes that point to the target IP address
-        self.__close_all_rssi()
+        # Check if the PCIe card is present. If not, do not do anything.
+        if self.pcie_rssi_present:
 
-        # Open the RSSI lane
-        with self.pcie_rssi as pcie:
-            pcie.open_lane(lane=self.lane, ip=self.ip_addr)
+            # Close all RSSI lanes that point to the target IP address
+            self.__close_all_rssi()
+
+            # Check if the PCIe card is used. If not, do not do anything.
+            if self.use_pcie:
+
+                # Open the RSSI lane
+                with self.pcie_rssi as pcie:
+                    pcie.open_lane(lane=self.lane, ip=self.ip_addr)
 
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        # Close the RSSI lane before exit
-        with self.pcie_rssi as pcie:
-            pcie.close_lane(self.lane)
+        # Check if the PCIe card is present. If not, do not do anything.
+        if self.pcie_rssi_present:
+
+            # Check if the PCIe card is used. If not, do not do anything.
+            if self.use_pcie:
+
+                # Close the RSSI lane before exit,
+                with self.pcie_rssi as pcie:
+                    pcie.close_lane(self.lane)
 
     def __close_all_rssi(self):
         """
