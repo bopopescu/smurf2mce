@@ -203,7 +203,7 @@ class LocalServer(pyrogue.Root):
                         rogue.hardware.axi.AxiStreamDma(pcie_dev_rssi,(pcie_rssi_lane*0x100 + 0x80 + i), True))
 
                 # Streaming interface stream
-                self.streaming_stream =
+                self.streaming_stream = \
                     rogue.hardware.axi.AxiStreamDma(pcie_dev_data,(pcie_rssi_lane*0x100 + 0xC1), True)
 
                 # When PCIe communication is used, we connect the stream data directly to the receiver:
