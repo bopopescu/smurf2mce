@@ -375,7 +375,8 @@ class LocalServer(pyrogue.Root):
                 self.stream_fifos  = []
                 self.stream_slaves = []
                 for i in range(4):
-                    self.stream_slaves.append(self.epics.createSlave(name="AMCc:Stream{}".format(i), maxSize=stream_pv_size, type=stream_pv_type))
+                    self.stream_slaves.append(self.epics.createSlave(name="AMCc:Stream{}".format(i),
+                        maxSize=stream_pv_size, type=stream_pv_type))
 
                     # Calculate number of bytes needed on the fifo
                     if '16' in stream_pv_type:
