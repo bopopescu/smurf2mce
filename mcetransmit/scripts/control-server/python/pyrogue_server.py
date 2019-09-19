@@ -25,6 +25,7 @@ import time
 import struct
 from packaging import version
 from pathlib import Path
+import threading
 
 import pyrogue
 import pyrogue.utilities.fileio
@@ -106,6 +107,48 @@ def exit_message(message):
     print("")
     exit()
 
+class KeepAlive(rogue.interfaces.stream.Master, threading.Thread):
+    """
+    Class used to keep alive the streaming data UDP connection.
+
+    It is a Rogue Master device, which will be connected to the
+    UDP Client slave.
+
+    It will run a thread which will send an UDP packet every
+    5 seconds to avoid the connection to be closed. After
+    instantiate an object of this class, and connect it to the
+    UDP Client slave, its 'start()' method must be called to
+    start the thread itself.
+    """
+    def __init__(self):
+        super().__init__()
+        threading.Thread.__init__(self)
+
+        # Define the thread as a daemon so it is killed as
+        # soon as the main program exits.
+        self.daemon = True
+
+        # Request a 1-byte frame from the slave.
+        self.frame = self._reqFrame(1, True)
+
+        # Create a 1-byte element to be sent to the
+        # slave. The content of the packet is not
+        # important.
+        self.ba = bytearray(1)
+
+    def run(self):
+        """
+        This method is called the the class' 'start()'
+        method is called.
+
+        It implements an infinite loop that send an UDP
+        packet every 5 seconds.
+        """
+        while True:
+            self.frame.write(self.ba,0)
+            self._sendFrame(self.frame)
+            time.sleep(5)
+
 class LocalServer(pyrogue.Root):
     """
     Local Server class. This class configure the whole rogue application.
@@ -150,8 +193,9 @@ class LocalServer(pyrogue.Root):
                 for i in [0, 1, 4, 5]:
                     self.ddr_streams.append(fpga.stream.application(0x80 + i))
 
-                # Streaming interface stream
-                self.streaming_stream = fpga.stream.application(0xC1)
+                # Streaming interface stream. It comes over UDP, port 8195, without RSSI,
+                # so we use an UDP Client receiver.
+                self.streaming_stream = rogue.protocols.udp.Client(ip_addr, 8195, True)
 
             else:
                 for i in [0, 1, 4, 5]:
@@ -176,6 +220,14 @@ class LocalServer(pyrogue.Root):
                 pyrogue.streamConnect(self.streaming_stream, self.smurf2mce_fifo)
                 pyrogue.streamConnect(self.smurf2mce_fifo, self.smurf2mce)
 
+                # Create a KeepAlive object and connect it to the UDP Client.
+                # It is used to keep the UDP connection open. This in only needed when
+                # using Ethernet communication, as the PCIe FW implements this functionality.
+                self.keep_alive = KeepAlive()
+                pyrogue.streamConnect(self.keep_alive, self.streaming_stream)
+                # Start the KeepAlive thread
+                self.keep_alive.start()
+
             # Add data streams (0-3) to file channels (0-3)
             for i in range(4):
 
@@ -184,7 +236,7 @@ class LocalServer(pyrogue.Root):
                     stm_data_writer.getChannel(i))
 
             ## Streaming interface streams
-            # We have already connected TDEST 0xC1 to the smurf2mce receiver,
+            # We have already connected it to the smurf2mce receiver,
             # so we need to tapping it to the data writer.
             pyrogue.streamTap(self.streaming_stream, stm_interface_writer.getChannel(0))
 
