@@ -25,6 +25,7 @@ import time
 import struct
 from packaging import version
 from pathlib import Path
+import threading
 
 import pyrogue
 import pyrogue.utilities.fileio
@@ -106,6 +107,48 @@ def exit_message(message):
     print("")
     exit()
 
+class KeepAlive(rogue.interfaces.stream.Master, threading.Thread):
+    """
+    Class used to keep alive the streaming data UDP connection.
+
+    It is a Rogue Master device, which will be connected to the
+    UDP Client slave.
+
+    It will run a thread which will send an UDP packet every
+    5 seconds to avoid the connection to be closed. After
+    instantiate an object of this class, and connect it to the
+    UDP Client slave, its 'start()' method must be called to
+    start the thread itself.
+    """
+    def __init__(self):
+        super().__init__()
+        threading.Thread.__init__(self)
+
+        # Define the thread as a daemon so it is killed as
+        # soon as the main program exits.
+        self.daemon = True
+
+        # Request a 1-byte frame from the slave.
+        self.frame = self._reqFrame(1, True)
+
+        # Create a 1-byte element to be sent to the
+        # slave. The content of the packet is not
+        # important.
+        self.ba = bytearray(1)
+
+    def run(self):
+        """
+        This method is called the the class' 'start()'
+        method is called.
+
+        It implements an infinite loop that send an UDP
+        packet every 5 seconds.
+        """
+        while True:
+            self.frame.write(self.ba,0)
+            self._sendFrame(self.frame)
+            time.sleep(5)
+
 class LocalServer(pyrogue.Root):
     """
     Local Server class. This class configure the whole rogue application.
@@ -143,38 +186,56 @@ class LocalServer(pyrogue.Root):
             # Create stream interfaces
             self.ddr_streams = []       # DDR streams
 
-            # If the packetizer is being used, the FpgaTopLevel class will defined a 'stream' interface exposing it.
-            # Otherwise, we are using DMA engine without packetizer. Create the stream interface accordingly.
-            # We are only using the first 2 channel of each AMC daughter card, i.e. channels 0, 1, 4, 5.
-            if hasattr(fpga, 'stream'):
-                for i in [0, 1, 4, 5]:
-                    self.ddr_streams.append(fpga.stream.application(0x80 + i))
-
-                # Streaming interface stream
-                self.streaming_stream = fpga.stream.application(0xC1)
-
-            else:
-                for i in [0, 1, 4, 5]:
-                    self.ddr_streams.append(rogue.hardware.axi.AxiStreamDma(pcie_dev_rssi,(pcie_rssi_lane*0x100 + 0x80 + i), True))
-
-                # Streaming interface stream
-                self.streaming_stream = rogue.hardware.axi.AxiStreamDma(pcie_dev_data,(pcie_rssi_lane*0x100 + 0xC1), True)
 
             # Our smurf2mce receiver
             # The data stream comes from TDEST 0xC1
             self.smurf2mce = MceTransmit.Smurf2MCE()
             self.smurf2mce.setDebug( False )
 
+            # Check if we are using PCIe or Ethernet communication.
             if 'pcie-' in comm_type:
+                # If we are suing PCIe communication, used AxiStreamDmas to get the DDR and streaming streams.
+
+                # DDR streams. We are only using the first 2 channel of each AMC daughter card, i.e.
+                # channels 0, 1, 4, 5.
+                for i in [0, 1, 4, 5]:
+                    self.ddr_streams.append(
+                        rogue.hardware.axi.AxiStreamDma(pcie_dev_rssi,(pcie_rssi_lane*0x100 + 0x80 + i), True))
+
+                # Streaming interface stream
+                self.streaming_stream = \
+                    rogue.hardware.axi.AxiStreamDma(pcie_dev_data,(pcie_rssi_lane*0x100 + 0xC1), True)
+
                 # When PCIe communication is used, we connect the stream data directly to the receiver:
                 # Stream -> smurf2mce receiver
                 pyrogue.streamConnect(self.streaming_stream, self.smurf2mce)
+
             else:
+                # If we are using Ethernet: DDR streams comes over the RSSI+packetizer channel, and
+                # the streaming streams comes over a pure UDP channel.
+
+                # DDR streams. The FpgaTopLevel class will defined a 'stream' interface exposing them.
+                # We are only using the first 2 channel of each AMC daughter card, i.e. channels 0, 1, 4, 5.
+                for i in [0, 1, 4, 5]:
+                    self.ddr_streams.append(fpga.stream.application(0x80 + i))
+
+                # Streaming interface stream. It comes over UDP, port 8195, without RSSI,
+                # so we use an UDP Client receiver.
+                self.streaming_stream = rogue.protocols.udp.Client(ip_addr, 8195, True)
+
                 # When Ethernet communication is used, We use a FIFO between the stream data and the receiver:
                 # Stream -> FIFO -> smurf2mce receiver
-                self.smurf2mce_fifo = rogue.interfaces.stream.Fifo(1000,0,True)
+                self.smurf2mce_fifo = rogue.interfaces.stream.Fifo(100000,0,True)
                 pyrogue.streamConnect(self.streaming_stream, self.smurf2mce_fifo)
                 pyrogue.streamConnect(self.smurf2mce_fifo, self.smurf2mce)
+
+                # Create a KeepAlive object and connect it to the UDP Client.
+                # It is used to keep the UDP connection open. This in only needed when
+                # using Ethernet communication, as the PCIe FW implements this functionality.
+                self.keep_alive = KeepAlive()
+                pyrogue.streamConnect(self.keep_alive, self.streaming_stream)
+                # Start the KeepAlive thread
+                self.keep_alive.start()
 
             # Add data streams (0-3) to file channels (0-3)
             for i in range(4):
@@ -184,7 +245,7 @@ class LocalServer(pyrogue.Root):
                     stm_data_writer.getChannel(i))
 
             ## Streaming interface streams
-            # We have already connected TDEST 0xC1 to the smurf2mce receiver,
+            # We have already connected it to the smurf2mce receiver,
             # so we need to tapping it to the data writer.
             pyrogue.streamTap(self.streaming_stream, stm_interface_writer.getChannel(0))
 
@@ -314,7 +375,8 @@ class LocalServer(pyrogue.Root):
                 self.stream_fifos  = []
                 self.stream_slaves = []
                 for i in range(4):
-                    self.stream_slaves.append(self.epics.createSlave(name="AMCc:Stream{}".format(i), maxSize=stream_pv_size, type=stream_pv_type))
+                    self.stream_slaves.append(self.epics.createSlave(name="AMCc:Stream{}".format(i),
+                        maxSize=stream_pv_size, type=stream_pv_type))
 
                     # Calculate number of bytes needed on the fifo
                     if '16' in stream_pv_type:
@@ -578,12 +640,14 @@ class PcieCard():
         # Check if the PCIe card for RSSI is present in the system
         if Path(dev_rssi).exists():
             self.pcie_rssi_present = True
+            self.pcie_rssi = PcieDev(dev=dev_rssi, name='pcie_rssi', description='PCIe for RSSI')
         else:
             self.pcie_rssi_present = False
 
         # Check if the PCIe card for DATA is present in the system
         if Path(dev_data).exists():
             self.pcie_data_present = True
+            self.pcie_data = PcieDev(dev=dev_data, name='pcie_data', description='PCIe for DATA')
         else:
             self.pcie_data_present = False
 
@@ -593,10 +657,16 @@ class PcieCard():
         else:
             self.use_pcie = False
 
+        # We need the IP address when the PCIe card is present, but not in used too.
+        # If the PCIe card is present, this value could be updated later.
+        # We need to know the IP address so we can look for all RSSI lanes that point
+        # to it and close their connections.
+        self.ip_addr = ip_addr
+
         # Look for configuration errors:
 
         if self.use_pcie:
-            # Check if we are trying to use PCIe communication without the Pcie
+            # Check if we are trying to use PCIe communication without the PCIe
             # cards present in the system
             if not self.pcie_rssi_present:
                 exit_message("  ERROR: PCIe device {} not present.".format(dev_rssi))
@@ -613,15 +683,13 @@ class PcieCard():
             else:
                 exit_message("  ERROR: Invalid RSSI lane number. Must be between 0 and 5")
 
-            # Should need to check that the IP address is defined when PCIe is present
-            # and not in used, but that is enforce in the main function. We need to
-            # know the IP address so we can look for all RSSI lanes that point to it
-            # and close their connections.
+            # We should need to check that the IP address is defined when PCIe is present
+            # and not in used, but that is enforce in the main function.
 
             # Not more configuration errors at this point
 
             # Prepare the PCIe (DATA)
-            with PcieDev(dev=dev_data, name='pcie_data', description='PCIe for DATA') as pcie:
+            with self.pcie_data as pcie:
                 # Verify that its DeviceID is correct
                 dev_data_id = pcie.get_id()
                 if dev_data_id != 1:
@@ -633,7 +701,6 @@ class PcieCard():
 
 
             # Prepare the PCIe (RSSI)
-            self.pcie_rssi = PcieDev(dev=dev_rssi, name='pcie_rssi', description='PCIe for RSSI')
             with self.pcie_rssi as pcie:
                 # Verify that its DeviceID is correct
                 dev_rssi_id = pcie.get_id()
@@ -700,19 +767,31 @@ class PcieCard():
         # When the PCIe card is not present we don't do anything
 
     def __enter__(self):
-        # Close all RSSI lanes that point to the target IP address
-        self.__close_all_rssi()
+        # Check if the PCIe card is present. If not, do not do anything.
+        if self.pcie_rssi_present:
 
-        # Open the RSSI lane
-        with self.pcie_rssi as pcie:
-            pcie.open_lane(lane=self.lane, ip=self.ip_addr)
+            # Close all RSSI lanes that point to the target IP address
+            self.__close_all_rssi()
+
+            # Check if the PCIe card is used. If not, do not do anything.
+            if self.use_pcie:
+
+                # Open the RSSI lane
+                with self.pcie_rssi as pcie:
+                    pcie.open_lane(lane=self.lane, ip=self.ip_addr)
 
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        # Close the RSSI lane before exit
-        with self.pcie_rssi as pcie:
-            pcie.close_lane(self.lane)
+        # Check if the PCIe card is present. If not, do not do anything.
+        if self.pcie_rssi_present:
+
+            # Check if the PCIe card is used. If not, do not do anything.
+            if self.use_pcie:
+
+                # Close the RSSI lane before exit,
+                with self.pcie_rssi as pcie:
+                    pcie.close_lane(self.lane)
 
     def __close_all_rssi(self):
         """
