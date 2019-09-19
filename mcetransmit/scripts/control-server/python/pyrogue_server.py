@@ -186,10 +186,36 @@ class LocalServer(pyrogue.Root):
             # Create stream interfaces
             self.ddr_streams = []       # DDR streams
 
-            # If the packetizer is being used, the FpgaTopLevel class will defined a 'stream' interface exposing it.
-            # Otherwise, we are using DMA engine without packetizer. Create the stream interface accordingly.
-            # We are only using the first 2 channel of each AMC daughter card, i.e. channels 0, 1, 4, 5.
-            if hasattr(fpga, 'stream'):
+
+            # Our smurf2mce receiver
+            # The data stream comes from TDEST 0xC1
+            self.smurf2mce = MceTransmit.Smurf2MCE()
+            self.smurf2mce.setDebug( False )
+
+            # Check if we are using PCIe or Ethernet communication.
+            if 'pcie-' in comm_type:
+                # If we are suing PCIe communication, used AxiStreamDmas to get the DDR and streaming streams.
+
+                # DDR streams. We are only using the first 2 channel of each AMC daughter card, i.e.
+                # channels 0, 1, 4, 5.
+                for i in [0, 1, 4, 5]:
+                    self.ddr_streams.append(
+                        rogue.hardware.axi.AxiStreamDma(pcie_dev_rssi,(pcie_rssi_lane*0x100 + 0x80 + i), True))
+
+                # Streaming interface stream
+                self.streaming_stream =
+                    rogue.hardware.axi.AxiStreamDma(pcie_dev_data,(pcie_rssi_lane*0x100 + 0xC1), True)
+
+                # When PCIe communication is used, we connect the stream data directly to the receiver:
+                # Stream -> smurf2mce receiver
+                pyrogue.streamConnect(self.streaming_stream, self.smurf2mce)
+
+            else:
+                # If we are using Ethernet: DDR streams comes over the RSSI+packetizer channel, and
+                # the streaming streams comes over a pure UDP channel.
+
+                # DDR streams. The FpgaTopLevel class will defined a 'stream' interface exposing them.
+                # We are only using the first 2 channel of each AMC daughter card, i.e. channels 0, 1, 4, 5.
                 for i in [0, 1, 4, 5]:
                     self.ddr_streams.append(fpga.stream.application(0x80 + i))
 
@@ -197,23 +223,6 @@ class LocalServer(pyrogue.Root):
                 # so we use an UDP Client receiver.
                 self.streaming_stream = rogue.protocols.udp.Client(ip_addr, 8195, True)
 
-            else:
-                for i in [0, 1, 4, 5]:
-                    self.ddr_streams.append(rogue.hardware.axi.AxiStreamDma(pcie_dev_rssi,(pcie_rssi_lane*0x100 + 0x80 + i), True))
-
-                # Streaming interface stream
-                self.streaming_stream = rogue.hardware.axi.AxiStreamDma(pcie_dev_data,(pcie_rssi_lane*0x100 + 0xC1), True)
-
-            # Our smurf2mce receiver
-            # The data stream comes from TDEST 0xC1
-            self.smurf2mce = MceTransmit.Smurf2MCE()
-            self.smurf2mce.setDebug( False )
-
-            if 'pcie-' in comm_type:
-                # When PCIe communication is used, we connect the stream data directly to the receiver:
-                # Stream -> smurf2mce receiver
-                pyrogue.streamConnect(self.streaming_stream, self.smurf2mce)
-            else:
                 # When Ethernet communication is used, We use a FIFO between the stream data and the receiver:
                 # Stream -> FIFO -> smurf2mce receiver
                 self.smurf2mce_fifo = rogue.interfaces.stream.Fifo(1000,0,True)
