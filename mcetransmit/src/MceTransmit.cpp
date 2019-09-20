@@ -414,7 +414,7 @@ void Smurf2MCE::read_mask(char *filename)  // ugly, hard coded file name. fire t
   fp = fopen("mask.txt", "r");
   if(fp == NULL)
   {
-    printf("unable to open mask file \n");
+    printf("unable to open mask file\n");
     return;
   }
     for(j =0; j < smurfsamples; j++)
@@ -703,7 +703,7 @@ bool SmurfConfig::read_config_file(void)
   if(!( fp = fopen(filename,"r")))
     return(false); // open config file
 
-  printf("reading config file \n");
+  printf("reading config file\n");
   do{
     n = fscanf(fp, "%s", variable);  // read into buffer
     if(n != 1) continue; // eof or lost here
@@ -928,7 +928,7 @@ SmurfValidCheck::SmurfValidCheck() // just creates  all variables.
   Smurf_frame->max_allowed_delta = 100;  // basically disable for now, just use syncbox jumps
   if(!(fp = fopen("frame_jump_log.txt", "w")))
   {
-    printf("unable to open frame jump log file frame_jump_log.txt");
+    printf("unable to open frame jump log file frame_jump_log.txt\n");
   }
   else
   {
@@ -959,7 +959,7 @@ void SmurfValidCheck::run(SmurfHeader *H)
 
     if(!(fp = fopen("frame_jump_log.txt", "a")))
     {
-      printf("unable to open frame jump log file frame_jump_log.txt");
+      printf("unable to open frame jump log file frame_jump_log.txt\n");
     }
     else
     {
@@ -983,7 +983,7 @@ void SmurfValidCheck::run(SmurfHeader *H)
     last_frame_jump = Smurf_frame->current;
     if(!(fp = fopen("frame_jump_log.txt", "a")))
     {
-      printf("unable to open frame jump log file frame_jump_log.txt");
+      printf("unable to open frame jump log file frame_jump_log.txt\n");
     }
     else
     {
