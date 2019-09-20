@@ -412,11 +412,11 @@ void Smurf2MCE::read_mask(char *filename)  // ugly, hard coded file name. fire t
   uint m;
 
   fp = fopen("mask.txt", "r");
-  if(fp==0)
-    {
-      printf("unable to open mask file \n");
-      return;
-    }
+  if(fp == NULL)
+  {
+    printf("unable to open mask file \n");
+    return;
+  }
     for(j =0; j < smurfsamples; j++)
       {
   ret = fscanf(fp,"%u", &m);  // read next line
@@ -699,7 +699,10 @@ bool SmurfConfig::read_config_file(void)
   double tmpd;
   double tmpf;
   char *endptr; // used but discarded in conversion
-  if(!( fp = fopen(filename,"r"))) return(false); // open config file
+
+  if(!( fp = fopen(filename,"r")))
+    return(false); // open config file
+
   printf("reading config file \n");
   do{
     n = fscanf(fp, "%s", variable);  // read into buffer
@@ -924,11 +927,14 @@ SmurfValidCheck::SmurfValidCheck() // just creates  all variables.
   Smurf2mce->max_allowed_delta = 100000000; // 1 s for now
   Smurf_frame->max_allowed_delta = 100;  // basically disable for now, just use syncbox jumps
   if(!(fp = fopen("frame_jump_log.txt", "w")))
-   {
-     printf("unable to oen frame jump log file frame_jump_log.txt");
-   }
-  fprintf(fp, "Frame Jump file \n");
-  fclose(fp);
+  {
+    printf("unable to open frame jump log file frame_jump_log.txt");
+  }
+  else
+  {
+    fprintf(fp, "Frame Jump file \n");
+    fclose(fp);
+  }
 
 }
 
@@ -947,20 +953,21 @@ void SmurfValidCheck::run(SmurfHeader *H)
   if(( H->get_epics_seconds() -initial_timing_system) < 30) // not started yet
     return;
   if (!ready)
+  {
+    printf("*******************starting to record frame jump log**********************************\n");
+    ready = true;
+
+    if(!(fp = fopen("frame_jump_log.txt", "a")))
     {
-      printf("*******************starting to record frame jump log**********************************\n");
-      ready = true;
-      if(!(fp = fopen("frame_jump_log.txt", "a")))
-  {
-    printf("unable to oen frame jump log file frame_jump_log.txt");
-  }
-      else
-  {
-    printf("Starting to record frame jumps\n");
-    fprintf(fp, "columns are: syncbox#, syncbox_delta, smurf_frame_delta, timing_sysetm_deltaT_us, Unix_deltaT_us, smurf2mce_delay_us");
-    fclose(fp);
-  }
+      printf("unable to open frame jump log file frame_jump_log.txt");
     }
+    else
+    {
+      printf("Starting to record frame jumps\n");
+      fprintf(fp, "columns are: syncbox#, syncbox_delta, smurf_frame_delta, timing_sysetm_deltaT_us, Unix_deltaT_us, smurf2mce_delay_us");
+      fclose(fp);
+    }
+  }
   //clock_gettime(CLOCK_REALTIME, &tmp_t);  // get time s, ns,  might be expensive
   //tmp = 1000000000l * (uint64_t) tmp_t.tv_sec + (uint64_t) tmp_t.tv_nsec;  //  multiply to 64 uint
   tmp = get_unix_time();
@@ -972,12 +979,14 @@ void SmurfValidCheck::run(SmurfHeader *H)
   Counter_1hz->update(H->get_1hz_counter());
   jump = Smurf_frame->update(H->get_frame_counter()) ? true : jump;
   if(jump && (Smurf_frame->current > (last_frame_jump + frame_wait)))   // On frame jump, write file,
-    {
-      last_frame_jump = Smurf_frame->current;
-      if(!(fp = fopen("frame_jump_log.txt", "a")))
   {
-    printf("unable to oen frame jump log file frame_jump_log.txt");
-  }
+    last_frame_jump = Smurf_frame->current;
+    if(!(fp = fopen("frame_jump_log.txt", "a")))
+    {
+      printf("unable to open frame jump log file frame_jump_log.txt");
+    }
+    else
+    {
       // fprintf(fp, "Frame jump at syncbox = %u, timingsystem time = %lu seconds \n", Syncbox->current, Timingsystem->current/1000000000);
       // fprintf(fp, "syncbox delta (~200Hz) = %4u \n ", Syncbox->delta);
       // fprintf(fp, "timing system delta = %10u us \n", Timingsystem->delta/1000);
@@ -986,12 +995,9 @@ void SmurfValidCheck::run(SmurfHeader *H)
       // fprintf(fp, "smurf_frame_delta = %4u \n", Smurf_frame->delta);
       // fprintf(fp, "smurf2mce delay = %u us, \n\n", Smurf2mce->delta/1000);
       fprintf(fp, "%10u, %2u, %4u, %6u %6u %6u \n", Syncbox->current, Syncbox->delta, Smurf_frame->delta, Timingsystem->delta/1000, Unix_time->delta/1000, Smurf2mce->delta/1000);
-
-
-
-
       fclose(fp);
     }
+  }
 }
 
 
