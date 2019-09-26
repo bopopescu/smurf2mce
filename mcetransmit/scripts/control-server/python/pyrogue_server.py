@@ -26,59 +26,70 @@ import struct
 from packaging import version
 from pathlib import Path
 import re
+import threading
 
 import pyrogue
 import pyrogue.utilities.fileio
 import rogue.interfaces.stream
 import MceTransmit
 
-import gc
-gc.disable()
-print("GARBGE COLLECTION DISABLED")
-
-
-PIDFILE = '/tmp/smurf.pid'
-
 # Print the usage message
 def usage(name):
-    print("Usage: {} -a|--addr IP_address [-d|--defaults config_file]".format(name),\
-        " [-s|--server] [-p|--pyro group_name] [-e|--epics prefix]",\
-        " [-n|--nopoll] [-b|--stream-size byte_size] [-f|--stream-type data_type]",\
-        " [-c|--commType comm_type] [-l|--slot slot_number] [-h|--help]")
-    print("    -h|--help                  : Show this message")
-    print("    -a|--addr IP_address       : FPGA IP address")
-    print("    -d|--defaults config_file  : Default configuration file")
-    print("    -p|--pyro group_name       : Start a Pyro4 server with",\
-        "group name \"group_name\"")
-    print("    -e|--epics prefix          : Start an EPICS server with",\
+    print("Usage: {}".format(name))
+    print("        [-a|--addr IP_address] [-s|--server] [-e|--epics prefix]")
+    print("        [-n|--nopoll] [-c|--commType comm_type] [-l|--pcie-rssi-lane index]")
+    print("        [-f|--stream-type data_type] [-b|--stream-size byte_size]")
+    print("        [-d|--defaults config_file] [-u|--dump-pvs file_name] [--disable-gc]")
+    print("        [--disable-bay0] [--disable-bay1] [-w|--windows-title title]")
+    print("        [--pcie-dev-rssi pice_device] [--pcie-dev-data pice_device] [-h|--help]")
+    print("")
+    print("    -h|--help                   : Show this message")
+    print("    -a|--addr IP_address        : FPGA IP address. Required when"\
+        "the communication type is based on Ethernet.")
+    print("    -d|--defaults config_file   : Default configuration file")
+    print("    -e|--epics prefix           : Start an EPICS server with",\
         "PV name prefix \"prefix\"")
-    print("    -s|--server                : Server mode, without staring",\
+    print("    -s|--server                 : Server mode, without staring",\
         "a GUI (Must be used with -p and/or -e)")
-    print("    -n|--nopoll                : Disable all polling")
-    print("    -c|--commType comm_type    : Communication type with the FPGA",\
-        "(default to \"eth-rssi-non-interleaved\"")
-    print("    -l|--pcie-rssi-link index  : PCIe RSSI link (only needed with"\
+    print("    -n|--nopoll                 : Disable all polling")
+    print("    -c|--commType comm_type     : Communication type with the FPGA",\
+        "(defaults to \"eth-rssi-non-interleaved\"")
+    print("    -l|--pcie-rssi-lane index   : PCIe RSSI lane (only needed with"\
         "PCIe). Supported values are 0 to 5")
-    print("    -b|--stream-size data_size : Expose the stream data as EPICS",\
+    print("    -b|--stream-size data_size  : Expose the stream data as EPICS",\
         "PVs. Only the first \"data_size\" points will be exposed.",\
         "(Must be used with -e)")
-    print("    -f|--stream-type data_type : Stream data type (UInt16, Int16,",\
+    print("    -f|--stream-type data_type  : Stream data type (UInt16, Int16,",\
         "UInt32 or Int32). Default is UInt16. (Must be used with -e and -b)")
-    print("    -u|--dump-pvs file_name    : Dump the PV list to \"file_name\".",\
+    print("    -u|--dump-pvs file_name     : Dump the PV list to \"file_name\".",\
         "(Must be used with -e)")
+    print("    --disable-bay0              : Disable the instantiation of the"\
+        "devices for Bay0")
+    print("    --disable-bay1              : Disable the instantiation of the"\
+        "devices for Bay1")
+    print("    --disable-gc                : Disable python's garbage collection"\
+        "(enabled by default)")
+    print("    -w|--windows-title title    : Set the GUI windows title. If not"\
+        "specified, the default windows title will be the name of this script."\
+        "This value will be ignored when running in server mode.")
+    print("    --pcie-dev-rssi pice_device : Set the PCIe card device name"\
+        "used for RSSI (defaults to '/dev/datadev_0')")
+    print("    --pcie-dev-data pice_device : Set the PCIe card device name"\
+        "used for data (defaults to '/dev/datadev_1')")
     print("")
     print("Examples:")
-    print("    {} -a IP_address                            :".format(name),\
-        " Start a local rogue server, with GUI, without Pyro nor EPICS servers")
-    print("    {} -a IP_address -e prefix                  :".format(name),\
-        " Start a local rogue server, with GUI, with EPICS server")
-    print("    {} -a IP_address -e prefix -p group_name -s :".format(name),\
-        " Start a local rogure server, without GUI, with Pyro and EPICS servers")
+    print("    {} -a IP_address              :".format(name),\
+        " Start a local rogue server, with GUI, without an EPICS servers")
+    print("    {} -a IP_address -e prefix    :".format(name),\
+        " Start a local rogue server, with GUI, with and EPICS server")
+    print("    {} -a IP_address -e prefix -s :".format(name),\
+        " Start a local rogue server, without GUI, with an EPICS servers")
     print("")
 
-# Cretae gui interface
-def create_gui(root):
+# Create gui interface
+def create_gui(root, title=""):
     app_top = pyrogue.gui.application(sys.argv)
+    app_top.setApplicationName(title)
     gui_top = pyrogue.gui.GuiTop(group='GuiTop')
     gui_top.addTree(root)
     print("Starting GUI...\n")
@@ -97,134 +108,56 @@ def exit_message(message):
     print("")
     exit()
 
-# Get the hostname of this PC
-def get_host_name():
-    return subprocess.check_output("hostname").strip().decode("utf-8")
-
-class DataBuffer(rogue.interfaces.stream.Slave):
+class KeepAlive(rogue.interfaces.stream.Master, threading.Thread):
     """
-    Data buffer class use to capture data comming from the stream FIFO \
-    and copy it into a local buffer using a especific data format.
+    Class used to keep alive the streaming data UDP connection.
+
+    It is a Rogue Master device, which will be connected to the
+    UDP Client slave.
+
+    It will run a thread which will send an UDP packet every
+    5 seconds to avoid the connection to be closed. After
+    instantiate an object of this class, and connect it to the
+    UDP Client slave, its 'start()' method must be called to
+    start the thread itself.
     """
-    def __init__(self, size, data_type):
-        rogue.interfaces.stream.Slave.__init__(self)
-        self._buf = [0] * size
+    def __init__(self):
+        super().__init__()
+        threading.Thread.__init__(self)
 
-        # Supported data format and byte order
-        self._data_format_dict = {
-            'B': 'unsigned 8-bit',
-            'b': 'signed 8-bit',
-            'H': 'unsigned 16-bit',
-            'h': 'signed 16-bit',
-            'I': 'unsigned 32-bit',
-            'i': 'signed 32-bit'}
+        # Define the thread as a daemon so it is killed as
+        # soon as the main program exits.
+        self.daemon = True
 
-        self._data_byte_order_dict = {
-            '<': 'little-endian',
-            '>': 'big-endian'}
+        # Request a 1-byte frame from the slave.
+        self.frame = self._reqFrame(1, True)
 
-        # Get data format and size from data type
-        if data_type == 'UInt16':
-            self._data_format = 'H'
-            self._data_size = 2
-        elif data_type == 'Int16':
-            self._data_format = 'h'
-            self._data_size = 2
-        elif data_type == 'UInt32':
-            self._data_format = 'I'
-            self._data_size = 4
-        else:
-            self._data_format = 'i'
-            self._data_size = 4
+        # Create a 1-byte element to be sent to the
+        # slave. The content of the packet is not
+        # important.
+        self.ba = bytearray(1)
 
-        # Byte order: LE
-        self._data_byte_order = '<'
+    def run(self):
+        """
+        This method is called the the class' 'start()'
+        method is called.
 
-        # Callback function
-        self._callback = lambda: None
-
-    def _acceptFrame(self, frame):
+        It implements an infinite loop that send an UDP
+        packet every 5 seconds.
         """
-        This method is called when a stream frame is received
-        """
-        data = bytearray(frame.getPayload())
-        frame.read(data, 0)
-        self._buf = struct.unpack('{}{}{}'.format((self._data_byte_order, \
-            (len(data)//self._data_size), self._data_format), data))
-        self._callback()
-
-    def set_callback(self, callback):
-        """
-        Function to set the callback function
-        """
-        self._callback = callback
-
-    def read(self):
-        """
-        Function to read the data buffer
-        """
-        return self._buf
-
-    def get_data_format_string(self):
-        """
-        Function to get the current format string
-        """
-        return '{}{}'.format(self._data_byte_order, self._data_format)
-
-    def get_data_format_list(self):
-        """
-        Function to get a list of supported data formats
-        """
-        return list(self._data_format_dict.values())
-
-    def get_data_byte_order_list(self):
-        """
-        Function to get a list of supported data byte order options
-        """
-        return list(self._data_byte_order_dict.values())
-
-    def set_data_format(self, dev, var, value):
-        """
-        Function to set the data format
-        """
-        if (value < len(self._data_format_dict)):
-            data_format = (list(self._data_format_dict)[value])
-            if data_format == 'B' or data_format == 'b':      # uint8, int8
-                self._data_format = data_format
-                self._data_size = 1
-            elif data_format == 'H' or  data_format == 'h':     # uint16, int16
-                self._data_format = data_format
-                self._data_size = 2
-            elif data_format == 'I' or data_format == 'i':    # uint32, int32
-                self._data_format = data_format
-                self._data_size = 4
-
-    def get_data_format(self):
-        """
-        Function to read the data format
-        """
-        return list(self._data_format_dict).index(self._data_format)
-
-    def set_data_byte_order(self, dev, var, value):
-        """
-        Function to set the data byte order
-        """
-        if (value < len(self._data_byte_order_dict)):
-            self._data_byte_order = list(self._data_byte_order_dict)[value]
-
-    def get_data_byte_order(self):
-        """
-        Function to read the data byte order
-        """
-        return list(self._data_byte_order_dict).index(self._data_byte_order)
+        while True:
+            self.frame.write(self.ba,0)
+            self._sendFrame(self.frame)
+            time.sleep(5)
 
 class LocalServer(pyrogue.Root):
     """
     Local Server class. This class configure the whole rogue application.
     """
-    def __init__(self, ip_addr, config_file, server_mode, group_name, epics_prefix,\
-        polling_en, comm_type, pcie_rssi_link, stream_pv_size, stream_pv_type,\
-        pv_dump_file):
+    def __init__(self, ip_addr, config_file, server_mode, epics_prefix,\
+        polling_en, comm_type, pcie_rssi_lane, stream_pv_size, stream_pv_type,\
+        pv_dump_file, disable_bay0, disable_bay1, disable_gc, windows_title,\
+        pcie_dev_rssi, pcie_dev_data):
 
         try:
             pyrogue.Root.__init__(self, name='AMCc', description='AMC Carrier')
@@ -238,35 +171,84 @@ class LocalServer(pyrogue.Root):
             self.add(stm_interface_writer)
 
             # Workaround to FpgaTopLelevel not supporting rssi = None
-            if pcie_rssi_link == None:
-                pcie_rssi_link = 0
+            if pcie_rssi_lane == None:
+                pcie_rssi_lane = 0
 
             # Instantiate Fpga top level
             fpga = FpgaTopLevel(ipAddr=ip_addr,
                 commType=comm_type,
-                pcieRssiLink=pcie_rssi_link)
+                pcieRssiLink=pcie_rssi_lane,
+                disableBay0=disable_bay0,
+                disableBay1=disable_bay1)
 
             # Add devices
             self.add(fpga)
 
-            # Add data streams (0-7) to file channels (0-7)
-            for i in range(8):
-                # DDR streams
-                pyrogue.streamConnect(fpga.stream.application(0x80 + i),
-                 stm_data_writer.getChannel(i))
-                # Streaming interface streams
-                #pyrogue.streamConnect(fpga.stream.application(0xC0 + i),  # new commended out
-                # stm_interface_writer.getChannel(i))
+            # Create stream interfaces
+            self.ddr_streams = []       # DDR streams
 
-            # Our receiver
-            data_fifo = rogue.interfaces.stream.Fifo(1000,0,1)    # new
+
+            # Our smurf2mce receiver
+            # The data stream comes from TDEST 0xC1
             self.smurf2mce = MceTransmit.Smurf2MCE()
             self.smurf2mce.setDebug( False )
-            #pyrogue.streamConnect(base.FpgaTopLevel.stream.application(0xC1), data_fifo) # new
-            #pyrogue.streamConnect(base.FpgaTopLevel.stream.Application(0xC1), data_fifo) # new
-            pyrogue.streamConnect(fpga.stream.application(0xC1), data_fifo)
-            pyrogue.streamConnect(data_fifo, self.smurf2mce)
-            #pyrogue.streamTap(fpga.stream.application(0xC1), rx)
+
+            # Check if we are using PCIe or Ethernet communication.
+            if 'pcie-' in comm_type:
+                # If we are suing PCIe communication, used AxiStreamDmas to get the DDR and streaming streams.
+
+                # DDR streams. We are only using the first 2 channel of each AMC daughter card, i.e.
+                # channels 0, 1, 4, 5.
+                for i in [0, 1, 4, 5]:
+                    self.ddr_streams.append(
+                        rogue.hardware.axi.AxiStreamDma(pcie_dev_rssi,(pcie_rssi_lane*0x100 + 0x80 + i), True))
+
+                # Streaming interface stream
+                self.streaming_stream = \
+                    rogue.hardware.axi.AxiStreamDma(pcie_dev_data,(pcie_rssi_lane*0x100 + 0xC1), True)
+
+                # When PCIe communication is used, we connect the stream data directly to the receiver:
+                # Stream -> smurf2mce receiver
+                pyrogue.streamConnect(self.streaming_stream, self.smurf2mce)
+
+            else:
+                # If we are using Ethernet: DDR streams comes over the RSSI+packetizer channel, and
+                # the streaming streams comes over a pure UDP channel.
+
+                # DDR streams. The FpgaTopLevel class will defined a 'stream' interface exposing them.
+                # We are only using the first 2 channel of each AMC daughter card, i.e. channels 0, 1, 4, 5.
+                for i in [0, 1, 4, 5]:
+                    self.ddr_streams.append(fpga.stream.application(0x80 + i))
+
+                # Streaming interface stream. It comes over UDP, port 8195, without RSSI,
+                # so we use an UDP Client receiver.
+                self.streaming_stream = rogue.protocols.udp.Client(ip_addr, 8195, True)
+
+                # When Ethernet communication is used, We use a FIFO between the stream data and the receiver:
+                # Stream -> FIFO -> smurf2mce receiver
+                self.smurf2mce_fifo = rogue.interfaces.stream.Fifo(100000,0,True)
+                pyrogue.streamConnect(self.streaming_stream, self.smurf2mce_fifo)
+                pyrogue.streamConnect(self.smurf2mce_fifo, self.smurf2mce)
+
+                # Create a KeepAlive object and connect it to the UDP Client.
+                # It is used to keep the UDP connection open. This in only needed when
+                # using Ethernet communication, as the PCIe FW implements this functionality.
+                self.keep_alive = KeepAlive()
+                pyrogue.streamConnect(self.keep_alive, self.streaming_stream)
+                # Start the KeepAlive thread
+                self.keep_alive.start()
+
+            # Add data streams (0-3) to file channels (0-3)
+            for i in range(4):
+
+                ## DDR streams
+                pyrogue.streamConnect(self.ddr_streams[i],
+                    stm_data_writer.getChannel(i))
+
+            ## Streaming interface streams
+            # We have already connected it to the smurf2mce receiver,
+            # so we need to tapping it to the data writer.
+            pyrogue.streamTap(self.streaming_stream, stm_interface_writer.getChannel(0))
 
             # Add Local variable to set the TesBias scale factor. The variable has a listener function
             # which is called when a new value is written to it.
@@ -312,86 +294,6 @@ class LocalServer(pyrogue.Root):
                     10: '10 Hz',
                     30: '30 Hz'}))
 
-            # PVs for stream data, used on PCAS-based EPICS server
-            if epics_prefix and stream_pv_size:
-                if use_pcas:
-
-                    print("Enabling stream data on PVs (buffer size = {} points, data type = {})"\
-                        .format(stream_pv_size,stream_pv_type))
-
-                    # Add data streams (0-7) to local variables so they are expose as PVs
-                    # Also add PVs to select the data format
-                    for i in range(8):
-
-                        # Calculate number of bytes needed on the fifo
-                        if '16' in stream_pv_type:
-                            fifo_size = stream_pv_size * 2
-                        else:
-                            fifo_size = stream_pv_size * 4
-
-                        # Setup a FIFO tapped to the steram data and a Slave data buffer
-                        # Local variables will talk to the data buffer directly.
-                        stream_fifo = rogue.interfaces.stream.Fifo(0, fifo_size, 0)
-                        data_buffer = DataBuffer(size=stream_pv_size, data_type=stream_pv_type)
-                        stream_fifo._setSlave(data_buffer)
-
-                        #pyrogue.streamTap(fpga.stream.application(0x80 + i), stream_fifo)
-
-                        # Variable to read the stream data
-                        stream_var = pyrogue.LocalVariable(
-                            name='Stream{}'.format(i),
-                            description='Stream {}'.format(i),
-                            mode='RO',
-                            value=0,
-                            localGet=data_buffer.read,
-                            update=False,
-                            hidden=True)
-
-                        # Set the buffer callback to update the variable
-                        data_buffer.set_callback(stream_var.updated)
-
-                        # Variable to set the data format
-                        data_format_var = pyrogue.LocalVariable(
-                            name='StreamDataFormat{}'.format(i),
-                            description='Type of data being unpacked',
-                            mode='RW',
-                            value=0,
-                            enum={i:j for i,j in enumerate(data_buffer.get_data_format_list())},
-                            localSet=data_buffer.set_data_format,
-                            localGet=data_buffer.get_data_format,
-                            hidden=True)
-
-                        # Variable to set the data byte order
-                        byte_order_var = pyrogue.LocalVariable(
-                            name='StreamDataByteOrder{}'.format(i),
-                            description='Byte order of data being unpacked',
-                            mode='RW',
-                            value=0,
-                            enum={i:j for i,j in enumerate(data_buffer.get_data_byte_order_list())},
-                            localSet=data_buffer.set_data_byte_order,
-                            localGet=data_buffer.get_data_byte_order,
-                            hidden=True)
-
-                        # Variable to read the data format string
-                        format_string_var = pyrogue.LocalVariable(
-                            name='StreamDataFormatString{}'.format(i),
-                            description='Format string used to unpack the data',
-                            mode='RO',
-                            value=0,
-                            localGet=data_buffer.get_data_format_string,
-                            hidden=True)
-
-                        # Add listener to update the format string readback variable
-                        # when the data format or data byte order is changed
-                        data_format_var.addListener(format_string_var)
-                        byte_order_var.addListener(format_string_var)
-
-                        # Add the local variable to self
-                        self.add(stream_var)
-                        self.add(data_format_var)
-                        self.add(byte_order_var)
-                        self.add(format_string_var)
-
             # lcaPut limits the maximun lenght of a string to 40 chars, as defined
             # in the EPICS R3.14 CA reference manual. This won't allowed to use the
             # command 'ReadConfig' with a long file path, which is usually the case.
@@ -405,10 +307,13 @@ class LocalServer(pyrogue.Root):
                 description='Set default configuration',
                 function=self.set_defaults_cmd))
 
-            self.add(pyrogue.LocalCommand(
-                name='runGarbageCollection',
-                description='runGarbageCollection',
-                function=self.run_garbage_collection))
+            # If Garbage collection was disable, add this local variable to allow users
+            # to manually run the garbage collection.
+            if disable_gc:
+                self.add(pyrogue.LocalCommand(
+                    name='runGarbageCollection',
+                    description='runGarbageCollection',
+                    function=self.run_garbage_collection))
 
             self.add(pyrogue.LocalVariable(
                 name='mcetransmitDebug',
@@ -418,18 +323,55 @@ class LocalServer(pyrogue.Root):
                 localSet=lambda value: self.smurf2mce.setDebug(value),
                 hidden=False))
 
+            # Lost frame counter from smurf2mce
+            self.add(pyrogue.LocalVariable(
+                name='frameLossCnt',
+                description='Lost frame Counter',
+                mode='RO',
+                value=0,
+                localGet=self.smurf2mce.getFrameLossCnt,
+                pollInterval=1,
+                hidden=False))
 
+            # Received frame counter from smurf2mce
+            self.add(pyrogue.LocalVariable(
+                name='frameRxCnt',
+                description='Received frame Counter',
+                mode='RO',
+                value=0,
+                localGet=self.smurf2mce.getFrameRxCnt,
+                pollInterval=1,
+                hidden=False))
+
+            # Out-of-order frame counter from smurf2mce
+            self.add(pyrogue.LocalVariable(
+                name='frameOutOrderCnt',
+                description='Number of time out-of-order frames are detected',
+                mode='RO',
+                value=0,
+                localGet=self.smurf2mce.getFrameOutOrderCnt,
+                pollInterval=1,
+                hidden=False))
+
+            # Bad frame counter
+            self.add(pyrogue.LocalVariable(
+                name='badFrameCnt',
+                description='Number of lost frames due to a bad frame',
+                mode='RO',
+                value=0,
+                localGet=self.smurf2mce.getBadFrameCnt,
+                pollInterval=1,
+                hidden=False))
+
+            # Command to clear all the frame counters on smurf2mce
+            self.add(pyrogue.LocalCommand(
+                name='clearFrameCnt',
+                description='Clear all the frame counters',
+                function=self.smurf2mce.clearFrameCnt))
 
             # Start the root
-            if group_name:
-                # Start with Pyro4 server
-                host_name = get_host_name()
-                print("Starting rogue server with Pyro using group name \"{}\"".format(group_name))
-                self.start(pollEn=polling_en, pyroGroup=group_name, pyroHost=host_name, pyroNs=None)
-            else:
-                # Start without Pyro4 server
-                print("Starting rogue server")
-                self.start(pollEn=polling_en)
+            print("Starting rogue server")
+            self.start(pollEn=polling_en)
 
             self.ReadAll()
 
@@ -466,34 +408,33 @@ class LocalServer(pyrogue.Root):
         if epics_prefix:
             print("Starting EPICS server using prefix \"{}\"".format(epics_prefix))
 
-            # Choose the appropiate epics module:
-            if use_pcas:
-                self.epics = pyrogue.epics.EpicsCaServer(base=epics_prefix, root=self)
-            else:
-                self.epics = pyrogue.protocols.epics.EpicsCaServer(base=epics_prefix, root=self)
+            self.epics = pyrogue.protocols.epics.EpicsCaServer(base=epics_prefix, root=self)
 
-                # PVs for stream data, used on GDD-based EPICS server
-                if stream_pv_size:
+            # PVs for stream data
+            if stream_pv_size:
 
-                    print("Enabling stream data on PVs (buffer size = {} points, data type = {})"\
-                        .format(stream_pv_size,stream_pv_type))
+                print("Enabling stream data on PVs (buffer size = {} points, data type = {})"\
+                    .format(stream_pv_size,stream_pv_type))
 
-                    for i in range(8):
-                        stream_slave = self.epics.createSlave(name="AMCc:Stream{}".format(i), maxSize=stream_pv_size, type=stream_pv_type)
+                self.stream_fifos  = []
+                self.stream_slaves = []
+                for i in range(4):
+                    self.stream_slaves.append(self.epics.createSlave(name="AMCc:Stream{}".format(i),
+                        maxSize=stream_pv_size, type=stream_pv_type))
 
-                        # Calculate number of bytes needed on the fifo
-                        if '16' in stream_pv_type:
-                            fifo_size = stream_pv_size * 2
-                        else:
-                            fifo_size = stream_pv_size * 4
+                    # Calculate number of bytes needed on the fifo
+                    if '16' in stream_pv_type:
+                        fifo_size = stream_pv_size * 2
+                    else:
+                        fifo_size = stream_pv_size * 4
 
-                        stream_fifo = rogue.interfaces.stream.Fifo(0, fifo_size, 0) # chnages
-                        stream_fifo._setSlave(stream_slave)
-                        pyrogue.streamTap(fpga.stream.application(0x80+i), stream_fifo)
+                    self.stream_fifos.append(rogue.interfaces.stream.Fifo(1000, fifo_size, True)) # changes
+                    self.stream_fifos[i]._setSlave(self.stream_slaves[i])
+                    pyrogue.streamTap(self.ddr_streams[i], self.stream_fifos[i])
 
             self.epics.start()
 
-            # Dump the PV list to the especified file
+            # Dump the PV list to the specified file
             if pv_dump_file:
                 try:
                     # Try to open the output file
@@ -518,7 +459,7 @@ class LocalServer(pyrogue.Root):
 
         # If no in server Mode, start the GUI
         if not server_mode:
-            create_gui(self)
+            create_gui(self, title=windows_title)
         else:
             # Stop the server when Crtl+C is pressed
             print("")
@@ -579,40 +520,207 @@ class LocalServer(pyrogue.Root):
 
         self.smurf2mce.setTesBiasSF(value)
 
+class PcieDev():
+    """
+    Class to setup each PCIe device
+
+    This class contains wrapper to facilitate the process of setting
+    up each PCIe device independently by the PcieCard class.
+
+    This class must be used in a 'with' block in order to ensure that the
+    RSSI connection is close correctly during exit even in the case of an
+    exception condition.
+
+    """
+    def __init__(self, dev, name, description):
+        import rogue.hardware.axi
+        import SmurfKcu1500RssiOffload as fpga
+        self.root = pyrogue.Root(name=name,description=description)
+        memMap = rogue.hardware.axi.AxiMemMap(dev)
+        self.root.add(fpga.Core(memBase=memMap))
+
+    def __enter__(self):
+        self.root.start(pollEn='False',initRead='True')
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.root.stop()
+
+    def get_id(self):
+        """
+        Get the Device ID
+        """
+        return int(self.root.Core.AxiPcieCore.AxiVersion.DeviceId.get())
+
+    def get_local_mac(self, lane):
+        """
+        Get the local MAC address for the specified Ethernet lane.
+        """
+        return self.root.Core.EthPhyGrp.EthConfig[lane].LocalMac.get()
+
+    def set_local_mac(self, lane, mac):
+        """
+        Set the local MAC address for the specified Ethernet lane.
+        """
+        return self.root.Core.EthPhyGrp.EthConfig[lane].LocalMac.set(mac)
+
+    def get_local_ip(self, lane):
+        """
+        Get the local IP address for the specified Ethernet lane.
+        """
+        return self.root.Core.EthPhyGrp.EthConfig[lane].LocalIp.get()
+
+    def set_local_ip(self, lane, ip):
+        """
+        Set the local IP address for the specified Ethernet lane.
+        """
+        return self.root.Core.EthPhyGrp.EthConfig[lane].LocalIp.set(ip)
+
+    def get_remote_ip(self, lane, client):
+        """
+        Get the remote IP address for the specified Ethernet lane.
+        """
+        return self.root.Core.UdpGrp.UdpEngine[lane].ClientRemoteIp[client].get()
+
+    def set_remote_ip(self, lane, client, ip):
+        """
+        Set the remote IP address for the specified Ethernet lane.
+        """
+        return self.root.Core.UdpGrp.UdpEngine[lane].ClientRemoteIp[client].set(ip)
+
+    def open_lane(self, lane, ip):
+        """
+        Open the RSSI connection on the specified lane, using the specified IP address.
+        """
+        print("    Opening PCIe RSSI lane {}".format(lane))
+        self.root.Core.UdpGrp.UdpConfig[lane].EnKeepAlive.set(1)
+        self.root.Core.UdpGrp.UdpConfig[lane].KeepAliveConfig.set(0x2E90EDD0)  # 5 seconds
+        self.root.Core.UdpGrp.RssiClient[lane].OpenConn.set(1)
+        self.root.Core.UdpGrp.RssiClient[lane].CloseConn.set(0)
+        self.root.Core.UdpGrp.UdpEngine[lane].ClientRemoteIp[0].set(ip)
+        self.root.Core.UdpGrp.UdpEngine[lane].ClientRemoteIp[1].set(ip)
+        self.root.Core.UdpGrp.UdpEngine[lane].ClientRemotePort[0].set(8198)
+        self.root.Core.UdpGrp.UdpEngine[lane].ClientRemotePort[1].set(8195)
+
+        # Print register status after setting them
+        self.__print_lane_registers(lane)
+
+    def close_lane(self, lane):
+        """
+        Close the RSSI connection on the specified Ethernet lane.
+        """
+        print("    Closing PCIe RSSI lane {}".format(lane))
+        self.root.Core.UdpGrp.UdpConfig[lane].KeepAliveConfig.set(0)
+        self.root.Core.UdpGrp.RssiClient[lane].OpenConn.set(0)
+        self.root.Core.UdpGrp.RssiClient[lane].CloseConn.set(1)
+        self.root.Core.UdpGrp.UdpEngine[lane].ClientRemotePort[0].set(0)
+        self.root.Core.UdpGrp.UdpEngine[lane].ClientRemotePort[1].set(8192)
+
+        # Print register status after setting them
+        self.__print_lane_registers(lane)
+
+    def __print_lane_registers(self, lane):
+        """
+        Print the register for the specified Ethernet lane.
+        """
+        print("      PCIe register status:")
+        print("      Core.UdpGrp.UdpConfig[{}].EnKeepAlive         = {}".format(lane,
+            self.root.Core.UdpGrp.UdpConfig[lane].EnKeepAlive.get()))
+        print("      Core.UdpGrp.UdpConfig[{}].KeepAliveConfig     = 0x{:02X}".format(lane,
+            self.root.Core.UdpGrp.UdpConfig[lane].KeepAliveConfig.get()))
+        print("      Core.UdpGrp.RssiClient[{}].OpenConn           = {}".format(lane,
+            self.root.Core.UdpGrp.RssiClient[lane].OpenConn.get()))
+        print("      Core.UdpGrp.RssiClient[{}].CloseConn          = {}".format(lane,
+            self.root.Core.UdpGrp.RssiClient[lane].CloseConn.get()))
+        print("      Core.UdpGrp.UdpEngine[{}].ClientRemotePort[0] = {}".format(lane,
+            self.root.Core.UdpGrp.UdpEngine[lane].ClientRemotePort[0].get()))
+        print("      Core.UdpGrp.UdpEngine[{}].ClientRemoteIp[0]   = {}".format(lane,
+            self.root.Core.UdpGrp.UdpEngine[lane].ClientRemoteIp[0].get()))
+        print("      Core.UdpGrp.UdpEngine[{}].ClientRemotePort[1] = {}".format(lane,
+            self.root.Core.UdpGrp.UdpEngine[lane].ClientRemotePort[1].get()))
+        print("      Core.UdpGrp.UdpEngine[{}].ClientRemoteIp[1]   = {}".format(lane,
+            self.root.Core.UdpGrp.UdpEngine[lane].ClientRemoteIp[1].get()))
+        print("      Core.EthPhyGrp.EthConfig[{}].LocalMac         = {}".format(lane,
+            self.root.Core.EthPhyGrp.EthConfig[lane].LocalMac.get()))
+        print("      Core.EthPhyGrp.EthConfig[{}].LocalIp          = {}".format(lane,
+            self.root.Core.EthPhyGrp.EthConfig[lane].LocalIp.get()))
+        print("")
+
+    def print_version(self):
+        """
+        Print the PCIe device firmware information.
+        """
+        print("  ==============================================================")
+        print("                   {}".format(self.root.description))
+        print("  ==============================================================")
+        print("    FW Version      : 0x{:08X}".format(
+            self.root.Core.AxiPcieCore.AxiVersion.FpgaVersion.get()))
+        print("    FW GitHash      : 0x{:040X}".format(
+            self.root.Core.AxiPcieCore.AxiVersion.GitHash.get()))
+        print("    FW image name   : {}".format(
+            self.root.Core.AxiPcieCore.AxiVersion.ImageName.get()))
+        print("    FW build env    : {}".format(
+            self.root.Core.AxiPcieCore.AxiVersion.BuildEnv.get()))
+        print("    FW build server : {}".format(
+            self.root.Core.AxiPcieCore.AxiVersion.BuildServer.get()))
+        print("    FW build date   : {}".format(
+            self.root.Core.AxiPcieCore.AxiVersion.BuildDate.get()))
+        print("    FW builder      : {}".format(
+            self.root.Core.AxiPcieCore.AxiVersion.Builder.get()))
+        print("    Up time         : {}".format(
+            self.root.Core.AxiPcieCore.AxiVersion.UpTime.get()))
+        print("    Xilinx DNA ID   : 0x{:032X}".format(
+            self.root.Core.AxiPcieCore.AxiVersion.DeviceDna.get()))
+        print("    Device ID       : {}".format(
+            self.root.Core.AxiPcieCore.AxiVersion.DeviceId.get()))
+        print("  ==============================================================")
+        print("")
+
 class PcieCard():
     """
-    Class to setup the PCIe RSSI card.
+    Class to setup the PCIe card devices.
 
-    This class takes care of setting up PCIe card according to the communication
-    type used.
+    This class takes care of setting up both PCIe card devices according to the
+    communication type used.
 
     If the PCIe card is present in the system:
-    - All the RSSI connection links which point to the target IP address will
+    - All the RSSI connection lanes which point to the target IP address will
       be closed.
-    - If PCIe comunication type is used, the RSSI connection is open in the
-      specific link. Also, when the the server is closed, the RSSI connection
-      is closed.
+    - If PCIe communication type is used:
+        - Verify that the DeviceId are correct for the RSSI (ID = 0) and the DATA
+          (ID = 1) devices.
+        - the RSSI connection is open in the specific lane. Also, when the the server
+          is closed, the RSSI connection is closed.
+    -
 
     If the PCIe card is not present:
-    - If PCIe comunication type is used, the program is terminated.
+    - If PCIe communication type is used, the program is terminated.
     - If ETH communication type is used, then this class does not do anything.
 
     This class must be used in a 'with' block in order to ensure that the
     RSSI connection is close correctly during exit even in the case of an
-    exepction condition.
+    exception condition.
     """
 
-    def __init__(self, comm_type, link, ip_addr='', dev='/dev/datadev_0'):
+    def __init__(self, comm_type, lane, ip_addr, dev_rssi, dev_data):
 
         print("Setting up the RSSI PCIe card...")
 
         # Get system status:
 
-        # Check if the PCIe card is present in the system
-        if Path(dev).exists():
-            self.pcie_present = True
+        # Check if the PCIe card for RSSI is present in the system
+        if Path(dev_rssi).exists():
+            self.pcie_rssi_present = True
+            self.pcie_rssi = PcieDev(dev=dev_rssi, name='pcie_rssi', description='PCIe for RSSI')
         else:
-            self.pcie_present = False
+            self.pcie_rssi_present = False
+
+        # Check if the PCIe card for DATA is present in the system
+        if Path(dev_data).exists():
+            self.pcie_data_present = True
+            self.pcie_data = PcieDev(dev=dev_data, name='pcie_data', description='PCIe for DATA')
+        else:
+            self.pcie_data_present = False
 
         # Check if we use the PCIe for communication
         if 'pcie-' in comm_type:
@@ -620,244 +728,163 @@ class PcieCard():
         else:
             self.use_pcie = False
 
+        # We need the IP address when the PCIe card is present, but not in used too.
+        # If the PCIe card is present, this value could be updated later.
+        # We need to know the IP address so we can look for all RSSI lanes that point
+        # to it and close their connections.
+        self.ip_addr = ip_addr
+
         # Look for configuration errors:
 
-        # Check if we are trying to use PCIe communication without the Pcie
-        # card present in the system
-        if self.use_pcie and not self.pcie_present:
-            exit_message("  ERROR: PCIe device {} does not exist.".format(dev))
-
-        # When the PCIe is in used verify the link number is valid
         if self.use_pcie:
-            if link == None:
-                exit_message("  ERROR: Must specify an RSSI link number")
+            # Check if we are trying to use PCIe communication without the PCIe
+            # cards present in the system
+            if not self.pcie_rssi_present:
+                exit_message("  ERROR: PCIe device {} not present.".format(dev_rssi))
 
-            if link in range(0, 6):
-                self.link = link
+            if not self.pcie_data_present:
+                exit_message("  ERROR: PCIe device {} not present.".format(dev_data))
+
+            # Verify the lane number is valid
+            if lane == None:
+                exit_message("  ERROR: Must specify an RSSI lane number")
+
+            if lane in range(0, 6):
+                self.lane = lane
             else:
-                exit_message("  ERROR: Invalid RSSI link number. Must be between 0 and 5")
+                exit_message("  ERROR: Invalid RSSI lane number. Must be between 0 and 5")
 
-        # Should need to check that the IP address is defined when PCIe is present
-        # and not in used, but that is enforce in the main function. We need to
-        # know the IP address so we can look for all RSSI links that point to it
-        # and close their connections.
+            # We should need to check that the IP address is defined when PCIe is present
+            # and not in used, but that is enforce in the main function.
 
-        # Not more configuration errors at this point
+            # Not more configuration errors at this point
 
-        # Prepare the PCIe when present
-        if self.pcie_present:
+            # Prepare the PCIe (DATA)
+            with self.pcie_data as pcie:
+                # Verify that its DeviceID is correct
+                dev_data_id = pcie.get_id()
+                if dev_data_id != 1:
+                    exit_message("  ERROR: The DeviceId for the PCIe dev for DATA is {} instead "\
+                        "of 1. Choose the correct device.".format(dev_data_id))
 
-            # Build the pyrogue device for the PCIe board
-            import rogue.hardware.axi
-            import SmurfKcu1500RssiOffload as fpga
-            self.pcie = pyrogue.Root(name='pcie',description='')
-            memMap = rogue.hardware.axi.AxiMemMap(dev)
-            self.pcie.add(fpga.Core(memBase=memMap))
-            self.pcie.start(pollEn='False',initRead='True')
+                # Print FW information
+                pcie.print_version()
 
-            # If the IP was not defined, read the one from the register space.
-            # Note: this could be the case only the PCIe is in used.
-            if not ip_addr:
-                ip_addr = self.pcie.Core.EthLane[0].UdpClient[self.link].ClientRemoteIp.get()
 
-                # Check if the IP address read from the PCIe card is valid
-                try:
-                    socket.inet_pton(socket.AF_INET, ip_addr)
-                except socket.error:
-                    exit_message("ERROR: IP Address read from the PCIe card: {} is invalid.".format(ip_addr))
+            # Prepare the PCIe (RSSI)
+            with self.pcie_rssi as pcie:
+                # Verify that its DeviceID is correct
+                dev_rssi_id = pcie.get_id()
+                if dev_rssi_id != 0:
+                    exit_message("  ERROR: The DeviceId for the PCIe dev for RSSI is {} instead "\
+                        "of 0. Choose the correct device.".format(dev_rssi_id))
 
-            # Update the IP address.
-            # Note: when the PCIe card is not in used, the IP will be defined
-            # by the user.
-            self.ip_addr = ip_addr
+                # Print FW information
+                pcie.print_version()
+
+                # Verify if the PCIe card is configured with a MAC and IP address.
+                # If not, load default values before it can be used.
+                valid_local_mac_addr = True
+                local_mac_addr = pcie.get_local_mac(lane=self.lane)
+                if local_mac_addr == "00:00:00:00:00:00":
+                    valid_local_mac_addr = False
+                    pcie.set_local_mac(lane=self.lane, mac="08:00:56:00:45:5{}".format(lane))
+                    local_mac_addr = pcie.get_local_mac(lane=self.lane)
+
+                valid_local_ip_addr = True
+                local_ip_addr = pcie.get_local_ip(lane=self.lane)
+                if local_ip_addr == "0.0.0.0":
+                    valid_local_ip_addr = False
+                    pcie.set_local_ip(lane=self.lane, ip="10.0.1.20{}".format(lane))
+                    local_ip_addr = pcie.get_local_ip(lane=self.lane)
+
+
+                # If the IP was not defined, read the one from the register space.
+                # Note: this could be the case only the PCIe is in use.
+                if not ip_addr:
+                    ip_addr = pcie.get_remote_ip(lane=self.lane, client=0)
+
+                    # Check if the IP address read from the PCIe card is valid
+                    try:
+                        socket.inet_pton(socket.AF_INET, ip_addr)
+                    except socket.error:
+                        exit_message("ERROR: IP Address read from the PCIe card: {} is invalid.".format(ip_addr))
+
+                # Update the IP address.
+                # Note: when the PCIe card is not in use, the IP will be defined
+                # by the user.
+                self.ip_addr = ip_addr
 
         # Print system configuration and status
-        print("  - PCIe present in the system             : {}".format(
-            "Yes" if self.pcie_present else "No"))
+        print("  - PCIe for RSSI present in the system    : {}".format(
+            "Yes" if self.pcie_rssi_present else "No"))
+        print("  - PCIe for Data present in the system    : {}".format(
+            "Yes" if self.pcie_data_present else "No"))
         print("  - PCIe based communicartion selected     : {}".format(
             "Yes" if self.use_pcie else "No"))
 
-        # Show IP address and link when the PCIe is in use
+        # Show IP address and lane when the PCIe is in use
         if self.use_pcie:
+            print("  - Valid MAC address                      : {}".format(
+                "Yes" if valid_local_mac_addr else "No. A default address was loaded"))
+            print("  - Valid IP address                       : {}".format(
+                "Yes" if valid_local_ip_addr else "No. A default address was loaded"))
+            print("  - Local MAC address:                     : {}".format(local_mac_addr))
+            print("  - Local IP address:                      : {}".format(local_ip_addr))
             print("  - Using IP address                       : {}".format(self.ip_addr))
-            print("  - Using RSSI link number                 : {}".format(self.link))
-
-        # Print the FW version information when the PCIe is present
-        if self.pcie_present:
-            self.print_version()
+            print("  - Using RSSI lane number                 : {}".format(self.lane))
+            print("")
 
         # When the PCIe card is not present we don't do anything
 
     def __enter__(self):
-        # Close all RSSI links that point to the target IP address
-        self.close_all_rssi()
+        # Check if the PCIe card is present. If not, do not do anything.
+        if self.pcie_rssi_present:
 
-        # Open the RSSI link
-        self.open_rssi()
+            # Close all RSSI lanes that point to the target IP address
+            self.__close_all_rssi()
+
+            # Check if the PCIe card is used. If not, do not do anything.
+            if self.use_pcie:
+
+                # Open the RSSI lane
+                with self.pcie_rssi as pcie:
+                    pcie.open_lane(lane=self.lane, ip=self.ip_addr)
 
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        # Close the RSSI link before exit
-        self.close_rssi()
+        # Check if the PCIe card is present. If not, do not do anything.
+        if self.pcie_rssi_present:
 
-        # Stop the device
-        if self.pcie_present:
-            self.pcie.stop()
+            # Check if the PCIe card is used. If not, do not do anything.
+            if self.use_pcie:
 
-    def open_rssi(self):
+                # Close the RSSI lane before exit,
+                with self.pcie_rssi as pcie:
+                    pcie.close_lane(self.lane)
+
+    def __close_all_rssi(self):
         """
-        Open the RSSI connection in the specified link
-        """
-
-        # Check if the PCIe is present and in used
-        if self.pcie_present and self.use_pcie:
-            print("  * Opening RSSI link...")
-            self.__configure(open=True, link=self.link)
-            print("  Done!")
-            print("")
-
-    def close_rssi(self):
-        """
-        Close the RSSI connection in the specified link
-        """
-
-        # Check if the PCIe is present and in used
-        if self.pcie_present and self.use_pcie:
-            print("  * Closing RSSI link...")
-            self.__configure(open=False, link=self.link)
-            print("  Done!")
-            print("")
-
-    def close_all_rssi(self):
-        """
-        Close all links with the target IP address
+        Close all lanes with the target IP address
         """
 
         # Check if the PCIe is present
-        if self.pcie_present:
-            print("  * Looking for RSSI links pointing to {}...".format(self.ip_addr))
-            # Look for links with the target IP address, and close their RSSI connection
-            for i in range(6):
-                if self.ip_addr == self.pcie.Core.EthLane[0].UdpClient[i].ClientRemoteIp.get():
-                    print("    RSSI Link {} points to it. Disabling it...".format(i))
-                    self.__configure(open=False, link=i)
-                    print("")
-            print("  Done!")
-            print("")
-
-    def print_version(self):
-        """
-        Print the FW version information
-        """
-
-        # Print inforamtion if the PCIe is present
-        if self.pcie_present:
-            # Call readAll so that the LinkVariables get updated correctly.
-            self.pcie.ReadAll.call()
-            print("  ==============================================================")
-            print("                         PCIe information")
-            print("  ==============================================================")
-            print("    FW Version      : 0x{:08X}".format(
-                self.pcie.Core.AxiPcieCore.AxiVersion.FpgaVersion.get()))
-            print("    FW GitHash      : 0x{:040X}".format(
-                self.pcie.Core.AxiPcieCore.AxiVersion.GitHash.get()))
-            print("    FW image name   : {}".format(
-                self.pcie.Core.AxiPcieCore.AxiVersion.ImageName.get()))
-            print("    FW build env    : {}".format(
-                self.pcie.Core.AxiPcieCore.AxiVersion.BuildEnv.get()))
-            print("    FW build server : {}".format(
-                self.pcie.Core.AxiPcieCore.AxiVersion.BuildServer.get()))
-            print("    FW build date   : {}".format(
-                self.pcie.Core.AxiPcieCore.AxiVersion.BuildDate.get()))
-            print("    FW builder      : {}".format(
-                self.pcie.Core.AxiPcieCore.AxiVersion.Builder.get()))
-            print("    Up time         : {}".format(
-                self.pcie.Core.AxiPcieCore.AxiVersion.UpTime.get()))
-            print("    Xilinx DNA ID   : 0x{:032X}".format(
-                self.pcie.Core.AxiPcieCore.AxiVersion.DeviceDna.get()))
-            print("  ==============================================================")
-            print("")
-
-    def __configure(self, open, link):
-
-        # Read the bypass RSSI mask
-        mask = self.pcie.Core.EthLane[0].EthConfig.BypRssi.get()
-        dis  = mask
-        dis |= (1<<link)
-        self.pcie.Core.EthLane[0].EthConfig.BypRssi.set(dis)
-        time.sleep(1)
-
-        if open:
-            print("    Opening PCIe RSSI link {}".format(link))
-
-            # Clear the RSSI bypass bit
-            mask &= ~(1<<link)
-
-            # Setup udp client IP address and port number
-            self.pcie.Core.EthLane[0].UdpClient[link].ClientRemoteIp.set(self.ip_addr)
-            self.pcie.Core.EthLane[0].UdpClient[link].ClientRemotePort.set(8198)
-        else:
-            print("    Closing PCIe RSSI link {}".format(link))
-
-            # Set the RSSI bypass bit
-            mask |= (1<<link)
-
-            # Setup udp client port number
-            self.pcie.Core.EthLane[0].UdpClient[link].ClientRemotePort.set(8192)
-
-        # Set the bypass RSSI mask
-        self.pcie.Core.EthLane[0].EthConfig.BypRssi.set(mask)
-
-        # Set the Open and close connection registers
-        self.pcie.Core.EthLane[0].RssiClient[link].CloseConn.set(int(not open))
-        self.pcie.Core.EthLane[0].RssiClient[link].OpenConn.set(int(open))
-        self.pcie.Core.EthLane[0].RssiClient[link].HeaderChksumEn.set(1)
-
-        # Printt register status after setting them
-        print("      PCIe register status:")
-        print("      EthConfig.BypRssi = 0x{:02X}".format(
-            self.pcie.Core.EthLane[0].EthConfig.BypRssi.get()))
-        print("      UdpClient[{}].ClientRemoteIp = {}".format(link,
-            self.pcie.Core.EthLane[0].UdpClient[link].ClientRemoteIp.get()))
-        print("      UdpClient[{}].ClientRemotePort = {}".format(link,
-            self.pcie.Core.EthLane[0].UdpClient[link].ClientRemotePort.get()))
-        print("      RssiClient[{}].CloseConn = {}".format(link,
-            self.pcie.Core.EthLane[0].RssiClient[link].CloseConn.get()))
-        print("      RssiClient[{}].OpenConn = {}".format(link,
-            self.pcie.Core.EthLane[0].RssiClient[link].OpenConn.get()))
-
-def kill_old_process():
-    try:
-        finp = open(PIDFILE)
-        pid = int(finp.readlines()[0][:-1])
-        finp.close()
-        cmd = "kill -9 %d" % pid
-        os.system(cmd)
-        print(' ')
-        print(' ')
-        print(' ')
-        print(' ')
-        print(' SMURF already running: killing pid=', str(pid), ' at ', str(time.ctime()))
-        print(' ')
-        print(' ')
-        print(' ')
-        print(' ')
-    except:
-        pass
-
-def save_pid():
-    """ save pid for later killing """
-    fpid = open(PIDFILE, 'w')
-    fpid.write("%d\n" % os.getpid() )
-    fpid.close()
+        if self.pcie_rssi_present:
+            with self.pcie_rssi as pcie:
+                print("  * Looking for RSSI lanes pointing to {}...".format(self.ip_addr))
+                # Look for links with the target IP address, and close their RSSI connection
+                for i in range(6):
+                    if self.ip_addr == pcie.get_remote_ip(lane=i, client=0):
+                        print("    Lane {} points to it. Disabling it...".format(i))
+                        pcie.close_lane(i)
+                        print("")
+                print("  Done!")
+                print("")
 
 # Main body
 if __name__ == "__main__":
-    kill_old_process()
-    save_pid()
     ip_addr = ""
-    group_name = ""
     epics_prefix = ""
     config_file = ""
     server_mode = False
@@ -867,16 +894,34 @@ if __name__ == "__main__":
     stream_pv_valid_types = ["UInt16", "Int16", "UInt32", "Int32"]
     comm_type = "eth-rssi-non-interleaved";
     comm_type_valid_types = ["eth-rssi-non-interleaved", "eth-rssi-interleaved", "pcie-rssi-interleaved"]
-    pcie_rssi_link=None
+    pcie_rssi_lane=None
     pv_dump_file= ""
-    pcie_dev=Path("/dev/datadev_0")
+    pcie_dev_rssi="/dev/datadev_0"
+    pcie_dev_data="/dev/datadev_1"
+    disable_bay0=False
+    disable_bay1=False
+    disable_gc=False
+    windows_title=""
+
+    # Only Rogue version >= 2.6.0 are supported. Before this version the EPICS
+    # interface was based on PCAS which is not longer supported.
+    try:
+        ver = pyrogue.__version__
+        if (version.parse(ver) <= version.parse('2.6.0')):
+            raise ImportError('Rogue version <= 2.6.0 is unsupported')
+    except AttributeError:
+        print("Error when trying to get the version of Rogue")
+        pritn("Only version of Rogue > 2.6.0 are supported")
+        raise
 
     # Read Arguments
     try:
         opts, _ = getopt.getopt(sys.argv[1:],
-            "ha:sp:e:d:nb:f:c:l:u:",
-            ["help", "addr=", "server", "pyro=", "epics=", "defaults=", "nopoll",
-            "stream-size=", "stream-type=", "commType=", "pcie-rssi-link=", "dump-pvs="])
+            "ha:se:d:nb:f:c:l:u:w:",
+            ["help", "addr=", "server", "epics=", "defaults=", "nopoll",
+            "stream-size=", "stream-type=", "commType=", "pcie-rssi-lane=", "dump-pvs=",
+            "disable-bay0", "disable-bay1", "disable-gc", "windows-title=", "pcie-dev-rssi=",
+            "pcie-dev-data="])
     except getopt.GetoptError:
         usage(sys.argv[0])
         sys.exit()
@@ -889,8 +934,6 @@ if __name__ == "__main__":
             ip_addr = arg
         elif opt in ("-s", "--server"):      # Server mode
             server_mode = True
-        elif opt in ("-p", "--pyro"):        # Pyro group name
-            group_name = arg
         elif opt in ("-e", "--epics"):       # EPICS prefix
             epics_prefix = arg
         elif opt in ("-n", "--nopoll"):      # Disable all polling
@@ -915,10 +958,28 @@ if __name__ == "__main__":
                 for c in comm_type_valid_types:
                     print("  - \"{}\"".format(c))
                 exit_message("ERROR: Invalid communication type")
-        elif opt in ("-l", "--pcie-rssi-link"):       # PCIe RSSI Link
-            pcie_rssi_link = int(arg)
+        elif opt in ("-l", "--pcie-rssi-lane"):       # PCIe RSSI Lane
+            pcie_rssi_lane = int(arg)
         elif opt in ("-u", "--dump-pvs"):   # Dump PV file
             pv_dump_file = arg
+        elif opt in ("--disable-bay0"):
+            disable_bay0 = True
+        elif opt in ("--disable-bay1"):
+            disable_bay1 = True
+        elif opt in ("--disable-gc"):
+            disable_gc = True
+        elif opt in ("-w", "--windows-title"):
+            windows_title = arg
+        elif opt in ("--pcie-dev-rssi"):
+            pcie_dev_rssi = arg
+        elif opt in ("--pcie-dev-data"):
+            pcie_dev_data = arg
+
+    # Disable garbage collection if requested
+    if disable_gc:
+        import gc
+        gc.disable()
+        print("GARBAGE COLLECTION DISABLED")
 
     # Verify if IP address is valid
     if ip_addr:
@@ -930,7 +991,7 @@ if __name__ == "__main__":
     # Check connection with the board if using eth communication
     if "eth-" in comm_type:
         if not ip_addr:
-            exit_message("ERROR: Must specify an IP address for ethernet base communication devices.")
+            exit_message("ERROR: Must specify an IP address for Ethernet base communication devices.")
 
         print("")
         print("Trying to ping the FPGA...")
@@ -942,10 +1003,10 @@ if __name__ == "__main__":
         except subprocess.CalledProcessError:
            exit_message("    ERROR: FPGA can't be reached!")
 
-    if server_mode and not (group_name or epics_prefix):
-        exit_message("    ERROR: Can not start in server mode without Pyro or EPICS server")
+    if server_mode and not (epics_prefix):
+        exit_message("    ERROR: Can not start in server mode without the EPICS server enabled")
 
-    # Try to import the FpgaTopLevel defintion
+    # Try to import the FpgaTopLevel definition
     try:
         from FpgaTopLevel import FpgaTopLevel
     except ImportError as ie:
@@ -954,48 +1015,36 @@ if __name__ == "__main__":
 
     # If EPICS server is enable, import the epics module
     if epics_prefix:
-        # Choose the appropiate epics module:
-        #  - until version 2.6.0 rogue uses PCASpy
-        #  - later versions use GDD
-        use_pcas = True
-        try:
-            ver = pyrogue.__version__
-            if (version.parse(ver) > version.parse('2.6.0')):
-                use_pcas = False
-        except AttributeError:
-            pass
-
-        if use_pcas:
-            print("Using PCAS-based EPICS server")
-            import pyrogue.epics
-        else:
-            print("Using GDD-based EPICS server")
-            import pyrogue.protocols.epics
+        import pyrogue.protocols.epics
 
     # Import the QT and gui modules if not in server mode
     if not server_mode:
         import pyrogue.gui
 
     # The PCIeCard object will take care of setting up the PCIe card (if present)
-    with PcieCard(link=pcie_rssi_link, comm_type=comm_type, ip_addr=ip_addr):
+    with PcieCard(lane=pcie_rssi_lane, comm_type=comm_type, ip_addr=ip_addr, dev_rssi=pcie_dev_rssi,
+        dev_data=pcie_dev_data):
 
         # Start pyRogue server
         server = LocalServer(
             ip_addr=ip_addr,
             config_file=config_file,
             server_mode=server_mode,
-            group_name=group_name,
             epics_prefix=epics_prefix,
             polling_en=polling_en,
             comm_type=comm_type,
-            pcie_rssi_link=pcie_rssi_link,
+            pcie_rssi_lane=pcie_rssi_lane,
             stream_pv_size=stream_pv_size,
             stream_pv_type=stream_pv_type,
-            pv_dump_file=pv_dump_file)
+            pv_dump_file=pv_dump_file,
+            disable_bay0=disable_bay0,
+            disable_bay1=disable_bay1,
+            disable_gc=disable_gc,
+            windows_title=windows_title,
+            pcie_dev_rssi=pcie_dev_rssi,
+            pcie_dev_data=pcie_dev_data)
 
     # Stop server
     server.stop()
-
-    os.remove(PIDFILE)
 
     print("")

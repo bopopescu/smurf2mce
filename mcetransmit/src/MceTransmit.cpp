@@ -47,30 +47,49 @@ namespace ris = rogue::interfaces::stream;
 class Smurf2MCE : public rogue::interfaces::stream::Slave {
 
 private:
-  bool debug_;
+  bool           debug_;
+  zmq::context_t context;
+  zmq::socket_t  socket;
+  uint32_t       prevFrameNumber;
+  uint32_t       frameNumber;
+  std::size_t    frameNumberDelta;
+  bool           firstFrame;
 
-  static const unsigned queueDepth = 4000;
+  // Received frame counter
+  std::size_t frameRxCnt;
 
-// Queue
-  rogue::Queue<boost::shared_ptr<rogue::interfaces::stream::Frame>> queue_;
-// Transmission thread
-  boost::thread* thread_;
-//! Thread background
-  void runThread(const char* endpoint);
+  // Lost frame counter
+  std::size_t frameLossCnt;
+
+  // Out-of-order frame counter
+  // Counts the number of time we received and
+  // out-of-order frame, not the number of frames
+  // out-of-order
+  std::size_t frameOutOrderCnt;
+
+  // Bad frame counter
+  // Counts how many frames have been dropped because
+  // of an error in the frame.
+  std::size_t badFrameCnt;
 
   // TesBias values
-  std::array<uint8_t, TesBiasBufferSize> tesBias; // Array to hold the TesBias values
-  TesBiasArray tba; // Object to access the Tesbias array
-  float tesBiasSF; // TesBias scale factor
+  std::array<uint8_t, TesBiasBufferSize> tesBias;   // Array to hold the TesBias values
+  TesBiasArray                           tba;       // Object to access the Tesbias array
+  float                                  tesBiasSF; // TesBias scale factor
 
 public:
-  uint32_t rxCount, rxBytes, rxLast;
-  uint32_t getCount() { return rxCount; } // Total frames
-  uint32_t getBytes() { return rxBytes; } // Total Bytes
-  uint32_t getLast()  { return rxLast;  } // Last frame size
-  void     setDebug(bool debug) { debug_ = debug; return;  } // Last frame size
-  void     setTesBias(std::size_t index, int32_t value); // Receive the TesBias from pyrogue
-  void     setTesBiasSF(float sf); // Receive the TesBias scale factor from pyrogue
+  uint32_t    rxCount, rxBytes, rxLast;
+  uint32_t    getCount()            { return rxCount;          } // Total frames
+  uint32_t    getBytes()            { return rxBytes;          } // Total Bytes
+  uint32_t    getLast()             { return rxLast;           } // Last frame size
+  void        setDebug(bool debug)  { debug_ = debug; return;  } // Last frame size
+  std::size_t getFrameRxCnt()       { return frameRxCnt;       } // Get the received frame counter
+  std::size_t getFrameLossCnt()     { return frameLossCnt;     } // Get the lost frame counter
+  std::size_t getFrameOutOrderCnt() { return frameOutOrderCnt; } // Get the lost frame counter
+  std::size_t getBadFrameCnt()      { return badFrameCnt;      } // Get the bad frame counter
+  void        clearFrameCnt();                                   // Clear all frame counters
+  void        setTesBias(std::size_t index, int32_t value);      // Receive the TesBias from pyrogue
+  void        setTesBiasSF(float sf);                            // Receive the TesBias scale factor from pyrogue
 
   bool initialized;
   uint internal_counter, fast_internal_counter;  // first is mce frames, second is smurf frames
@@ -114,12 +133,17 @@ public:
       // Expose methods to python
   static void setup_python() {
          bp::class_<Smurf2MCE, boost::shared_ptr<Smurf2MCE>, bp::bases<ris::Slave>, boost::noncopyable >("Smurf2MCE",bp::init<>())
-            .def("getCount", &Smurf2MCE::getCount)
-            .def("getBytes", &Smurf2MCE::getBytes)
-            .def("getLast",  &Smurf2MCE::getLast)
-            .def("setDebug",  &Smurf2MCE::setDebug)
-            .def("setTesBias", &Smurf2MCE::setTesBias)
-            .def("setTesBiasSF", &Smurf2MCE::setTesBiasSF)
+            .def("getCount",            &Smurf2MCE::getCount)
+            .def("getBytes",            &Smurf2MCE::getBytes)
+            .def("getLast",             &Smurf2MCE::getLast)
+            .def("setDebug",            &Smurf2MCE::setDebug)
+            .def("getFrameRxCnt",       &Smurf2MCE::getFrameRxCnt)
+            .def("getFrameLossCnt",     &Smurf2MCE::getFrameLossCnt)
+            .def("getFrameOutOrderCnt", &Smurf2MCE::getFrameOutOrderCnt)
+            .def("getBadFrameCnt",      &Smurf2MCE::getBadFrameCnt)
+            .def("clearFrameCnt",       &Smurf2MCE::clearFrameCnt)
+            .def("setTesBias",          &Smurf2MCE::setTesBias)
+            .def("setTesBiasSF",        &Smurf2MCE::setTesBiasSF)
          ;
          bp::implicitly_convertible<boost::shared_ptr<Smurf2MCE>, ris::SlavePtr>();
   };
@@ -128,6 +152,8 @@ public:
 Smurf2MCE::Smurf2MCE()
 :
   ris::Slave(),
+  context(1),
+  socket(context, ZMQ_PUSH),
   tesBias(),
   tba(tesBias.data(), TesBiasCount),
   tesBiasSF(1.0)
@@ -146,6 +172,10 @@ Smurf2MCE::Smurf2MCE()
   frame_error_counter = 0;
   last_frame_counter = 0;
   debug_ = false;
+  frameLossCnt = 0;
+  frameRxCnt = 0;
+  frameOutOrderCnt = 0;
+  badFrameCnt = 0;
 
   C = new SmurfConfig(); // will hold config info - testing for now
   M = new MCEHeader();  // creates a MCE header class
@@ -161,10 +191,10 @@ Smurf2MCE::Smurf2MCE()
   for(j = 0; j < 2; j++)
     {  // allocate 2 buffers, so we can swap up/ back for background subtraction.
       if(!(b[j] = (uint8_t*)malloc(pyrogue_buffer_length)))
-	{
-	  error("could not allocate smurf2mce buffer");
-	  return;
-	}
+  {
+    error("could not allocate smurf2mce buffer");
+    return;
+  }
       memset(b[j], 0, pyrogue_buffer_length); // zero to start with
     }
  if(!(average_mce_samples = (avgdata_t*)malloc(smurfsamples * sizeof(avgdata_t))))
@@ -193,25 +223,29 @@ Smurf2MCE::Smurf2MCE()
   read_mask(NULL);  // will use real file name later
   memset(wrap_counter, wrap_start, smurfsamples * sizeof(wrap_t));
 
+  printf("Connecting to %s\n", C->receiver_ip);
+  socket.connect(C->receiver_ip);
 
-  queue_.setThold(queueDepth);
-
-  thread_ = new boost::thread(boost::bind(&Smurf2MCE::runThread, this, C->receiver_ip));
+  // Variables used to count lost frames
+  uint32_t prevFrameNumber = 0;
+  uint32_t frameNumber = 0;
+  std::size_t frameNumberDelta = 0;
+  bool firstFrame = true;
 
   initialized = true;
-
 }
 
 
 
 // This function does most of the work. Runs every smurf frame
-void Smurf2MCE::runThread(const char* endpoint)
+void Smurf2MCE::acceptFrame( ris::FramePtr frame )
 {
-  printf("\n");
-  printf("Starting Smurf2MCE::runThread()\n");
-  printf("\n");
+  if ( frame->getError() || (frame->getFlags() & 0x100) )
+  {
+    ++badFrameCnt;
+    return;
+  }
 
-  ris::FramePtr frame;
   smurf_t *d, *p;  // d is this buffer, p is last buffer;
   char *pm;
   //avgdata_t *a; // used for averaging loop
@@ -227,152 +261,166 @@ void Smurf2MCE::runThread(const char* endpoint)
   smurf_t dx; // current sample in loop
   uint64_t tm;
 
-  zmq::context_t context(1);
-  zmq::socket_t socket(context, ZMQ_PUSH);
-  printf("Connecting to %s\n", endpoint);
-  socket.connect(endpoint);
+  zmq::message_t message(MCE_frame_length * sizeof(MCE_t));
 
+  buffer = b[bufn]; // buffer swap
+  bufn = bufn ? 0 : 1; // swap buffer reference
+  buffer_last = b[bufn]; // now that we've swapped them
+  frameToBuffer(frame, buffer);
 
+  H->copy_header(buffer);
+  d = (smurf_t*) (buffer+smurfheaderlength); // pointer to data
+  p =  (smurf_t*) (buffer_last+smurfheaderlength);  // pointer to previous data set
+  // V->run(H);
 
-   try{
-      while(1) {
-           zmq::message_t message(MCE_frame_length * sizeof(MCE_t));
+  // Check if we are missing frames
+  prevFrameNumber = frameNumber;         // Previous frame number
+  frameNumber = H->get_frame_counter();  // Current frame number
 
-           frame = queue_.pop();
-           buffer = b[bufn]; // buffer swap
-           bufn = bufn ? 0 : 1; // swap buffer reference
-           buffer_last = b[bufn]; // now that we've swapped them
-           frameToBuffer(frame, buffer);
+  // Don't compare the first frame
+  if (firstFrame)
+  {
+    firstFrame = false;
+  }
+  else
+  {
+    // Discard out-of-order frames
+    if ( frameNumber < prevFrameNumber )
+    {
+      ++frameOutOrderCnt;
+      return;
+    }
 
-           H->copy_header(buffer);
-           d = (smurf_t*) (buffer+smurfheaderlength); // pointer to data
-           p =  (smurf_t*) (buffer_last+smurfheaderlength);  // pointer to previous data set
-           // V->run(H);
+    // If we are missing frame, add the number of missing frames to the counter
+    frameNumberDelta = frameNumber - prevFrameNumber - 1;
+    if ( frameNumberDelta )
+      frameLossCnt += frameNumberDelta;
+  }
 
-           // Copy TES bias data into Smurf header. Hold mutex while reading the data
-           {
-              std::lock_guard<std::mutex> lock(*tba.getMutex());
-              H->put_field(h_tes_dac_offset,  h_tes_dac_width, tesBias.data());
-           }
+  // Update the received frame counter
+  ++frameRxCnt;
 
-           if(H->get_test_mode()) T->gen_test_smurf_data(d, H->get_test_mode(), H->get_syncword(), H->get_test_parameter());   // are we using test data, use pointer to data
+  // Copy TES bias data into Smurf header. Hold mutex while reading the data
+  {
+    std::lock_guard<std::mutex> lock(*tba.getMutex());
+    H->put_field(h_tes_dac_offset,  h_tes_dac_width, tesBias.data());
+  }
 
-           for(j = 0; j < smurfsamples; j++)
-             {
-               dctr = mask[j];
-               if((mask[j] < 0) || (mask[j] > 4095))
-                {
-                  printf("bad mask %u \n", mask[j]);
-         	  break;
-         	}
+  if(H->get_test_mode()) T->gen_test_smurf_data(d, H->get_test_mode(), H->get_syncword(), H->get_test_parameter());   // are we using test data, use pointer to data
 
-               if ((d[dctr] > upper_unwrap) && (p[dctr] < lower_unwrap)) // unwrap, add 1
-         	{
-         	  wrap_counter[j]-= 0x10000; // decrement wrap counter
-         	} else if((d[dctr] < lower_unwrap) && (p[dctr] > upper_unwrap))
-         	{
-         	  wrap_counter[j]+= 0x10000; // inccrement wrap counter
-         	}
-         	else; // nothing here
-               input_data[j] = (avgdata_t)(d[dctr]) + (avgdata_t) wrap_counter[j];
-             }
-           average_samples = F->filter(input_data, C->filter_order, C->filter_a, C->filter_b, C->filter_g); // Low Pass Filter
-           cnt = H->average_control(C->num_averages);
-           if(H->get_clear_bit()) // clear averages and wraps
-             {
-               memset(wrap_counter, wrap_start, smurfsamples * sizeof(wrap_t));  // clear wraps
-               H->clear_average();  // clears averaging
-               F->clear_filter();
-             }
+  for(j = 0; j < smurfsamples; j++)
+    {
+      dctr = mask[j];
+      if((mask[j] < 0) || (mask[j] > 4095))
+       {
+         printf("bad mask %u \n", mask[j]);
+   break;
+  }
 
-           if(H->read_config_file())
-             {
-               if(!(fast_internal_counter++ % 5000)){
-                C->read_config_file();  // checks for config changes, read immediately, then 1H
-                read_mask(NULL);  // re-read the mask file while held at zero
-               }
-             }
-           else fast_internal_counter = 0;
-           if (!cnt)
-             {
-               last_frame_counter = H->get_frame_counter(); // does this belont here???? not used anyway
-               last_1hz_counter = H->get_1hz_counter();
-               continue;  // just average, otherwise send frame  END OF Smurf frame rate LOOP **************************
-             }
-           F->end_run();  // clears if we are doing a straight average
-           M->make_header(); // increments counters, readies counter
-           M->set_word( mce_h_offset_status, mce_h_status_value);
-           M->set_word( MCEheader_CC_counter_offset, M->CC_frame_counter);
-           M->set_word( MCEheader_row_len_offset,  H->get_row_len());
-           M->set_word( MCEheader_num_rows_reported_offset, H->get_num_rows_reported());
-           M->set_word( MCEheader_data_rate_offset, H->get_data_rate());  // test with fixed average
-           M->set_word( MCEheader_CC_ARZ_counter, smurfsamples);
-           M->set_word( MCEheader_version_offset,  MCEheader_version); // can be in constructor
-           M->set_word( MCEheader_num_rows_offset, H->get_num_rows());
-           M->set_word( MCEheader_syncbox_offset, H->get_syncword());
-           M->set_word( MCEheader_user_word_offset, static_cast<uint32_t>( tesBiasSF * H->get_tes_bias(12) ) );
+      if ((d[dctr] > upper_unwrap) && (p[dctr] < lower_unwrap)) // unwrap, add 1
+  {
+    wrap_counter[j]-= 0x10000; // decrement wrap counter
+  } else if((d[dctr] < lower_unwrap) && (p[dctr] > upper_unwrap))
+  {
+    wrap_counter[j]+= 0x10000; // inccrement wrap counter
+  }
+  else; // nothing here
+      input_data[j] = (avgdata_t)(d[dctr]) + (avgdata_t) wrap_counter[j];
+    }
+  average_samples = F->filter(input_data, C->filter_order, C->filter_a, C->filter_b, C->filter_g); // Low Pass Filter
+  cnt = H->average_control(C->num_averages);
+  if(H->get_clear_bit()) // clear averages and wraps
+    {
+      memset(wrap_counter, wrap_start, smurfsamples * sizeof(wrap_t));  // clear wraps
+      H->clear_average();  // clears averaging
+      F->clear_filter();
+    }
 
-           // test data insertion
-           if(H->get_test_mode()) T->gen_test_mce_data(average_samples, H->get_test_mode(), H->get_syncword(), H->get_test_parameter());
-
-           // data munging for MCE format - needs 7 bit shift left for data mode 10
-           for(j = 0;j < smurfsamples; j++)
-             {
-               average_mce_samples[j] = (average_samples[j] & 0x1FFFFFF) << 7;
-             }
-
-           tcpbuf = (char *) (message.data());  // returns location to put data (8 bytes beyond tcp start)
-           memcpy(tcpbuf, M->mce_header, MCEheaderlength * sizeof(MCE_t));  // copy over MCE header to output buffer
-           memcpy(tcpbuf + MCEheaderlength * sizeof(MCE_t), average_mce_samples, smurfsamples * sizeof(avgdata_t)); //copy data
-           tcp_buflen =  MCEheaderlength * sizeof(MCE_t) + smurfsamples * sizeof(avgdata_t);
-           bufx       = (uint32_t*) (message.data());  // map buffer to 32 bit
-
-           checksum  = *(uint32_t *)(message.data());
-           //checksum  = bufx[0];
-           for (j = 1; j < MCE_frame_length-1; j++) checksum = checksum ^ bufx[j]; // calculate checksum (needed for MCE)
-           if (H->get_test_mode() == 14)
-             {
-               if(!(H->get_syncword() % 1000))
-         	{
-         	  printf("INTENTIONALLY BROKEN CHECKSUM \n");
-         	  checksum = checksum + 1;   // FORCE BROKEN CHECKSUM
-         	}
-             }
-
-           memcpy(tcpbuf + MCEheaderlength * sizeof(MCE_t) + smurfsamples * sizeof(avgdata_t), &checksum, sizeof(MCE_t));
-            if ( debug_ &&  ( !(internal_counter++ % slow_divider) ) )
-              {
-
-                printf("num_avg=%3u, syncword =%6u, epics_deltaT = %u us, unixdeltaT = %u us \n", cnt ,H->get_syncword(),V->Timingsystem->delta/1000, V-> Unix_time->delta/1000 );
-                printf("syn error = %5u, smurf_frame_error = %u, timing_sysetem_error = %u, unix_error = %u\n", V->Syncbox->error_count, V->Smurf_frame->error_count, V->Timingsystem->error_count, V->Unix_time->error_count);
-                printf("clr_avg= %d, dsabl_strm=%d, dsabl_file=%d, read_config = %d, test_mode = %u, %u\n\n", H->get_clear_bit(), H->disable_stream(),
-                	      H->disable_file_write(), H->read_config_file(),  H->get_test_mode() ,H->get_test_parameter());
-                for(uint nx = 0; nx < 4; nx++) printf("%6d ", average_samples[nx]);  // diagnostic printout
-                printf("\n");
-                V->reset();
-              }
-            last_epicsns = H->get_epics_nanoseconds();
-
-            if (!H->disable_stream())
-              {
-                socket.send(message,  ZMQ_NOBLOCK);
-                //socket.send(message);
-              }
-            else
-              {
-                M->CC_frame_counter = 0;  // set to zero when not streaming
-              }
-            V->run(H);
-            tm = V->Unix_time->current;
-            H->put_field(h_unix_time_offset,  h_unix_time_width, &tm); // add time to data stream
-           if(C->data_frames) D->write_file(H->header, smurfheaderlength, average_samples, smurfsamples, C->data_frames,
-         				   C->data_file_name, C->file_name_extend, H->disable_file_write());
-
-           tcpbuf   = NULL;  // returns location to put data (8 bytes beyond tcp start)
-           bufx     = NULL;
-         boost::this_thread::interruption_point();
+  if(H->read_config_file())
+    {
+      if(!(fast_internal_counter++ % 5000)){
+       C->read_config_file();  // checks for config changes, read immediately, then 1H
+       read_mask(NULL);  // re-read the mask file while held at zero
       }
-   } catch (boost::thread_interrupted&) { printf("caught error\n\n\n"); }
+    }
+  else fast_internal_counter = 0;
+  if (!cnt)
+    {
+      last_frame_counter = H->get_frame_counter(); // does this belont here???? not used anyway
+      last_1hz_counter = H->get_1hz_counter();
+      return;  // just average, otherwise send frame  END OF Smurf frame rate LOOP **************************
+    }
+  F->end_run();  // clears if we are doing a straight average
+  M->make_header(); // increments counters, readies counter
+  M->set_word( mce_h_offset_status, mce_h_status_value);
+  M->set_word( MCEheader_CC_counter_offset, M->CC_frame_counter);
+  M->set_word( MCEheader_row_len_offset,  H->get_row_len());
+  M->set_word( MCEheader_num_rows_reported_offset, H->get_num_rows_reported());
+  M->set_word( MCEheader_data_rate_offset, H->get_data_rate());  // test with fixed average
+  M->set_word( MCEheader_CC_ARZ_counter, smurfsamples);
+  M->set_word( MCEheader_version_offset,  MCEheader_version); // can be in constructor
+  M->set_word( MCEheader_num_rows_offset, H->get_num_rows());
+  M->set_word( MCEheader_syncbox_offset, H->get_syncword());
+  M->set_word( MCEheader_user_word_offset, static_cast<uint32_t>( tesBiasSF * H->get_tes_bias(12) ) );
+
+  // test data insertion
+  if(H->get_test_mode()) T->gen_test_mce_data(average_samples, H->get_test_mode(), H->get_syncword(), H->get_test_parameter());
+
+  // data munging for MCE format - needs 7 bit shift left for data mode 10
+  for(j = 0;j < smurfsamples; j++)
+    {
+      average_mce_samples[j] = (average_samples[j] & 0x1FFFFFF) << 7;
+    }
+
+  tcpbuf = (char *) (message.data());  // returns location to put data (8 bytes beyond tcp start)
+  memcpy(tcpbuf, M->mce_header, MCEheaderlength * sizeof(MCE_t));  // copy over MCE header to output buffer
+  memcpy(tcpbuf + MCEheaderlength * sizeof(MCE_t), average_mce_samples, smurfsamples * sizeof(avgdata_t)); //copy data
+  tcp_buflen =  MCEheaderlength * sizeof(MCE_t) + smurfsamples * sizeof(avgdata_t);
+  bufx       = (uint32_t*) (message.data());  // map buffer to 32 bit
+
+  checksum  = *(uint32_t *)(message.data());
+  //checksum  = bufx[0];
+  for (j = 1; j < MCE_frame_length-1; j++) checksum = checksum ^ bufx[j]; // calculate checksum (needed for MCE)
+  if (H->get_test_mode() == 14)
+    {
+      if(!(H->get_syncword() % 1000))
+  {
+   printf("INTENTIONALLY BROKEN CHECKSUM \n");
+   checksum = checksum + 1;   // FORCE BROKEN CHECKSUM
+  }
+    }
+
+  memcpy(tcpbuf + MCEheaderlength * sizeof(MCE_t) + smurfsamples * sizeof(avgdata_t), &checksum, sizeof(MCE_t));
+  if ( debug_ &&  ( !(internal_counter++ % slow_divider) ) )
+      {
+
+        printf("num_avg=%3u, syncword =%6u, epics_deltaT = %u us, unixdeltaT = %u us \n", cnt ,H->get_syncword(),V->Timingsystem->delta/1000, V-> Unix_time->delta/1000 );
+        printf("syn error = %5u, smurf_frame_error = %u, timing_sysetem_error = %u, unix_error = %u\n", V->Syncbox->error_count, V->Smurf_frame->error_count, V->Timingsystem->error_count, V->Unix_time->error_count);
+        printf("clr_avg= %d, dsabl_strm=%d, dsabl_file=%d, read_config = %d, test_mode = %u, %u\n\n", H->get_clear_bit(), H->disable_stream(),
+                H->disable_file_write(), H->read_config_file(),  H->get_test_mode() ,H->get_test_parameter());
+        for(uint nx = 0; nx < 4; nx++) printf("%6d ", average_samples[nx]);  // diagnostic printout
+        printf("\n");
+        V->reset();
+      }
+    last_epicsns = H->get_epics_nanoseconds();
+
+    if (!H->disable_stream())
+      {
+        socket.send(message,  ZMQ_NOBLOCK);
+        //socket.send(message);
+      }
+    else
+      {
+        M->CC_frame_counter = 0;  // set to zero when not streaming
+      }
+    V->run(H);
+    tm = V->Unix_time->current;
+    H->put_field(h_unix_time_offset,  h_unix_time_width, &tm); // add time to data stream
+  if(C->data_frames) D->write_file(H->header, smurfheaderlength, average_samples, smurfsamples, C->data_frames,
+           C->data_file_name, C->file_name_extend, H->disable_file_write());
+
+  tcpbuf   = NULL;  // returns location to put data (8 bytes beyond tcp start)
+  bufx     = NULL;
 }
 
 
@@ -385,16 +433,16 @@ void Smurf2MCE::read_mask(char *filename)  // ugly, hard coded file name. fire t
   uint m;
 
   fp = fopen("mask.txt", "r");
-  if(fp==0)
-    {
-      printf("unable to open mask file \n");
-      return;
-    }
+  if(fp == NULL)
+  {
+    printf("unable to open mask file\n");
+    return;
+  }
     for(j =0; j < smurfsamples; j++)
       {
-	ret = fscanf(fp,"%u", &m);  // read next line
-	if ((ret == EOF) || (ret == 0)) break;  // done
-	mask[j] = (m < smurf_raw_samples) ? m : 0;
+  ret = fscanf(fp,"%u", &m);  // read next line
+  if ((ret == EOF) || (ret == 0)) break;  // done
+  mask[j] = (m < smurf_raw_samples) ? m : 0;
       }
     fclose(fp);
 }
@@ -402,18 +450,6 @@ void Smurf2MCE::read_mask(char *filename)  // ugly, hard coded file name. fire t
 
 // ###############################################################################################################
 // THIS IS CALLED BY PYROGUE FOR EACH FRAME
-
-
-void Smurf2MCE::acceptFrame ( ris::FramePtr frame )
-{
-   rogue::GilRelease noGil;
-
-   if ( queue_.busy() )
-      return;
-
-   queue_.push(frame);
-   return;
-}
 
 void Smurf2MCE::frameToBuffer( ris::FramePtr frame, uint8_t * const buffer) {
    ris::Frame::BufferIterator src;
@@ -448,6 +484,15 @@ void Smurf2MCE::setTesBiasSF(float sf)
     std::cerr << "Error: TesBias factor can not be set to zero. Aborting..." << std::endl;
 
   tesBiasSF = sf;
+}
+
+// Clear the frame counters
+void  Smurf2MCE::clearFrameCnt()
+{
+  frameLossCnt     = 0;
+  frameRxCnt       = 0;
+  frameOutOrderCnt = 0;
+  badFrameCnt      = 0;
 }
 
 // Decodes information in the header part of the data from smurf
@@ -625,17 +670,17 @@ uint SmurfHeader::average_control(int num_averages) // returns num averages when
   if (num_averages)
     {
       if (average_counter == num_averages)
-	{
-	  average_counter = 0;
-	  return (num_averages); // end averaging with local control
-	}
+  {
+    average_counter = 0;
+    return (num_averages); // end averaging with local control
+  }
     }
   else{
     y = get_ext_counter();
     if (delta_syncword)  //
       {
-	x = average_counter; // number of averages
-	average_counter = 0; // reset average
+  x = average_counter; // number of averages
+  average_counter = 0; // reset average
       }
     last_ext_counter = y; // copy over counter
     return(x);  // return, 0 to kep averaging, otehr to zero average.
@@ -718,8 +763,11 @@ bool SmurfConfig::read_config_file(void)
   double tmpd;
   double tmpf;
   char *endptr; // used but discarded in conversion
-  if(!( fp = fopen(filename,"r"))) return(false); // open config file
-  printf("reading config file \n");
+
+  if(!( fp = fopen(filename,"r")))
+    return(false); // open config file
+
+  printf("reading config file\n");
   do{
     n = fscanf(fp, "%s", variable);  // read into buffer
     if(n != 1) continue; // eof or lost here
@@ -727,100 +775,100 @@ bool SmurfConfig::read_config_file(void)
     if(n != 1) continue; // probably lost if we got here
     if(!strcmp(variable, "num_averages"))
       {
-	tmp = strtol(value, &endptr, 10);  // base 10, last parameter
-	if (num_averages != tmp)
-	  {
-	    printf("num averages updated from %d to %d\n", num_averages, tmp);
-	    num_averages = tmp;
-	  }
-	continue;
+  tmp = strtol(value, &endptr, 10);  // base 10, last parameter
+  if (num_averages != tmp)
+    {
+      printf("num averages updated from %d to %d\n", num_averages, tmp);
+      num_averages = tmp;
+    }
+  continue;
       }
     if(!strcmp(variable, "data_frames"))
       {
-	tmp = strtol(value, &endptr, 10);  // base 10 last parameter
-	if (data_frames != tmp)
-	  {
-	    printf("data_frames updated from %d to %d\n", data_frames, tmp);
-	    data_frames = tmp;
-	  }
-	continue;
+  tmp = strtol(value, &endptr, 10);  // base 10 last parameter
+  if (data_frames != tmp)
+    {
+      printf("data_frames updated from %d to %d\n", data_frames, tmp);
+      data_frames = tmp;
+    }
+  continue;
       }
     if(!strcmp(variable, "receiver_ip"))
       {
-	if(strcmp(value, receiver_ip)) // update if different
-	  {
-	    printf("updated ip from %s,  to %s \n", receiver_ip, value);
-	    strncpy(receiver_ip, value, 40); // copy into IP string
-	  }
-	continue;
+  if(strcmp(value, receiver_ip)) // update if different
+    {
+      printf("updated ip from %s,  to %s \n", receiver_ip, value);
+      strncpy(receiver_ip, value, 40); // copy into IP string
+    }
+  continue;
       }
     if(!strcmp(variable, "port_number"))
       {
-	if(strcmp(value, port_number)) // update if different
-	  {
-	    printf("updated port number from %s,  to %s \n", port_number, value);
-	    strncpy(port_number, value, 8); // copy into IP string
-	  }
-	continue;
+  if(strcmp(value, port_number)) // update if different
+    {
+      printf("updated port number from %s,  to %s \n", port_number, value);
+      strncpy(port_number, value, 8); // copy into IP string
+    }
+  continue;
       }
     if(!strcmp(variable, "data_file_name"))
       {
-	if(strcmp(value, data_file_name)) // update if different
-	  {
-	    printf("updated data file name from  %s,  to %s \n", data_file_name, value);
-	    strncpy(data_file_name, value, 100); // copy into IP string
-	  }
-	continue;
+  if(strcmp(value, data_file_name)) // update if different
+    {
+      printf("updated data file name from  %s,  to %s \n", data_file_name, value);
+      strncpy(data_file_name, value, 100); // copy into IP string
+    }
+  continue;
       }
 
     if(!strcmp(variable, "file_name_extend"))
       {
-	tmp = strtol(value, &endptr, 10);  // base 10, doh
-	if (file_name_extend != tmp)
-	  {
-	    if(tmp) printf("adding time to file name");
-	    else  printf("not adding time to file name");
-	    file_name_extend = tmp;
-	  }
-	continue;
+  tmp = strtol(value, &endptr, 10);  // base 10, doh
+  if (file_name_extend != tmp)
+    {
+      if(tmp) printf("adding time to file name");
+      else  printf("not adding time to file name");
+      file_name_extend = tmp;
+    }
+  continue;
       }
     if(!strcmp(variable, "filter_order"))
       {
-	tmp = strtol(value, &endptr, 10);  // base 10, doh
-	if (filter_order != tmp)
-	  {
-	    printf("updated filter order from %d to %d\n", filter_order, tmp);
-	    filter_order = tmp;
-	  }
-	continue;
+  tmp = strtol(value, &endptr, 10);  // base 10, doh
+  if (filter_order != tmp)
+    {
+      printf("updated filter order from %d to %d\n", filter_order, tmp);
+      filter_order = tmp;
+    }
+  continue;
       }
     if(!strcmp(variable, "filter_gain"))
       {
-	tmpf = strtof(value, &endptr);  // base 10, doh
-	printf("updated filter gain from %g to %g, str=%s\n", filter_g, tmpf, value);
-	filter_g = (filter_t) tmpf;
-	continue;
+  tmpf = strtof(value, &endptr);  // base 10, doh
+  printf("updated filter gain from %g to %g, str=%s\n", filter_g, tmpf, value);
+  filter_g = (filter_t) tmpf;
+  continue;
       }
     for (uint n = 0; n < 16;  n++)
       {
-	char tmpa[100]; // holds string
-	char tmpb[100];
-	sprintf(tmpa, "filter_a%d",n);
-	sprintf(tmpb, "filter_b%d",n);
-	if(!strcmp(variable, tmpa))
-	  {
-	    tmpf = strtof(value, &endptr);  // conver to float
-	    printf("filter_a%d updated from %lg to %g, str = %s\n", n, filter_a[n], tmpf, value);
-	    filter_a[n] = (filter_t) tmpf;
-	    break;
-	  }
-	if(!strcmp(variable, tmpb))
-	  {
-	    tmpf = strtof(value, &endptr);  // conver to float
-	    printf("filter_b%d updated from %lg to %g str = %s\n", n, filter_b[n], tmpf, value);
-	    filter_b[n] = (filter_t) tmpf;
-	    break;
-	  }
+  char tmpa[100]; // holds string
+  char tmpb[100];
+  sprintf(tmpa, "filter_a%d",n);
+  sprintf(tmpb, "filter_b%d",n);
+  if(!strcmp(variable, tmpa))
+    {
+      tmpf = strtof(value, &endptr);  // conver to float
+      printf("filter_a%d updated from %lg to %g, str = %s\n", n, filter_a[n], tmpf, value);
+      filter_a[n] = (filter_t) tmpf;
+      break;
+    }
+  if(!strcmp(variable, tmpb))
+    {
+      tmpf = strtof(value, &endptr);  // conver to float
+      printf("filter_b%d updated from %lg to %g str = %s\n", n, filter_b[n], tmpf, value);
+      filter_b[n] = (filter_t) tmpf;
+      break;
+    }
 
       }
   }while ((n!=0) && (n != EOF));  // end when n ==0, end of  file
@@ -847,10 +895,10 @@ uint SmurfDataFile::write_file(uint8_t *header, uint header_bytes, avgdata_t *da
     {
       part_ = 0;
       if(fd)  // close file
-	{
-	  close(fd);
-	  fd = 0;
-	}
+  {
+    close(fd);
+    fd = 0;
+  }
       frame_counter = 0;
        return(frame_counter);
     }
@@ -865,21 +913,21 @@ uint SmurfDataFile::write_file(uint8_t *header, uint header_bytes, avgdata_t *da
       memset(filename, 0, 1024); // zero for now
       strcat(filename, fname); // add file name
       if (name_mode)
-	{
-	  tx = time(NULL);
-	  sprintf(tmp, ".part_%05u", part_);  // LAZY - need to use a real time converter.
-	  strcat(filename, tmp);
-	}
+  {
+    tx = time(NULL);
+    sprintf(tmp, ".part_%05u", part_);  // LAZY - need to use a real time converter.
+    strcat(filename, tmp);
+  }
       //else strcat(filename, ".dat");  // just use base name, Dont append dat.
 
       printf("new filename = %s \n", filename);
       unlink(filename); // try to delete file if it exists before creating
       if (!(fd = open(filename, O_WRONLY | O_CREAT | O_NONBLOCK, S_IRUSR | S_IWUSR))) // testing non blocking
       //if (!(fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC | O_NONBLOCK, S_IRUSR | S_IWUSR))) // testing non blocking
-	{
-	  printf("coult not open: %s \n", filename);
-	  return(0); // failed to open file
-	}
+  {
+    printf("coult not open: %s \n", filename);
+    return(0); // failed to open file
+  }
       else printf("opened file %s  fd = %d \n", filename, fd);
     }
   memcpy(frame, header, header_bytes);
@@ -943,12 +991,14 @@ SmurfValidCheck::SmurfValidCheck() // just creates  all variables.
   Smurf2mce->max_allowed_delta = 100000000; // 1 s for now
   Smurf_frame->max_allowed_delta = 100;  // basically disable for now, just use syncbox jumps
   if(!(fp = fopen("frame_jump_log.txt", "w")))
-   {
-     printf("unable to oen frame jump log file frame_jump_log.txt");
-   }
-  fprintf(fp, "Frame Jump file \n");
-  fclose(fp);
-
+  {
+    printf("unable to open frame jump log file frame_jump_log.txt\n");
+  }
+  else
+  {
+    fprintf(fp, "Frame Jump file \n");
+    fclose(fp);
+  }
 }
 
 
@@ -966,20 +1016,21 @@ void SmurfValidCheck::run(SmurfHeader *H)
   if(( H->get_epics_seconds() -initial_timing_system) < 30) // not started yet
     return;
   if (!ready)
+  {
+    printf("*******************starting to record frame jump log**********************************\n");
+    ready = true;
+
+    if(!(fp = fopen("frame_jump_log.txt", "a")))
     {
-      printf("*******************starting to record frame jump log**********************************\n");
-      ready = true;
-      if(!(fp = fopen("frame_jump_log.txt", "a")))
-	{
-	  printf("unable to oen frame jump log file frame_jump_log.txt");
-	}
-      else
-	{
-	  printf("Starting to record frame jumps\n");
-	  fprintf(fp, "columns are: syncbox#, syncbox_delta, smurf_frame_delta, timing_sysetm_deltaT_us, Unix_deltaT_us, smurf2mce_delay_us");
-	  fclose(fp);
-	}
+      printf("unable to open frame jump log file frame_jump_log.txt\n");
     }
+    else
+    {
+      printf("Starting to record frame jumps\n");
+      fprintf(fp, "columns are: syncbox#, syncbox_delta, smurf_frame_delta, timing_sysetm_deltaT_us, Unix_deltaT_us, smurf2mce_delay_us");
+      fclose(fp);
+    }
+  }
   //clock_gettime(CLOCK_REALTIME, &tmp_t);  // get time s, ns,  might be expensive
   //tmp = 1000000000l * (uint64_t) tmp_t.tv_sec + (uint64_t) tmp_t.tv_nsec;  //  multiply to 64 uint
   tmp = get_unix_time();
@@ -991,12 +1042,14 @@ void SmurfValidCheck::run(SmurfHeader *H)
   Counter_1hz->update(H->get_1hz_counter());
   jump = Smurf_frame->update(H->get_frame_counter()) ? true : jump;
   if(jump && (Smurf_frame->current > (last_frame_jump + frame_wait)))   // On frame jump, write file,
+  {
+    last_frame_jump = Smurf_frame->current;
+    if(!(fp = fopen("frame_jump_log.txt", "a")))
     {
-      last_frame_jump = Smurf_frame->current;
-      if(!(fp = fopen("frame_jump_log.txt", "a")))
-	{
-	  printf("unable to oen frame jump log file frame_jump_log.txt");
-	}
+      printf("unable to open frame jump log file frame_jump_log.txt\n");
+    }
+    else
+    {
       // fprintf(fp, "Frame jump at syncbox = %u, timingsystem time = %lu seconds \n", Syncbox->current, Timingsystem->current/1000000000);
       // fprintf(fp, "syncbox delta (~200Hz) = %4u \n ", Syncbox->delta);
       // fprintf(fp, "timing system delta = %10u us \n", Timingsystem->delta/1000);
@@ -1005,12 +1058,9 @@ void SmurfValidCheck::run(SmurfHeader *H)
       // fprintf(fp, "smurf_frame_delta = %4u \n", Smurf_frame->delta);
       // fprintf(fp, "smurf2mce delay = %u us, \n\n", Smurf2mce->delta/1000);
       fprintf(fp, "%10u, %2u, %4u, %6u %6u %6u \n", Syncbox->current, Syncbox->delta, Smurf_frame->delta, Timingsystem->delta/1000, Unix_time->delta/1000, Smurf2mce->delta/1000);
-
-
-
-
       fclose(fp);
     }
+  }
 }
 
 
@@ -1065,30 +1115,30 @@ avgdata_t *SmurfFilter::filter(avgdata_t *data, int order, filter_t *a, filter_t
   if (order == -1) // special case flat average filter
     {
       for(uint n = 0; n <  samples;  n++)
-	{
-	  *(yd + bn * samples + n) += (filter_t) (*(data+n)); // just sum into first record.
-	  *(output+n) = (avgdata_t) (*(yd+bn*samples + n) / (filter_t) samples_since_clear);  // convert
-	}
+  {
+    *(yd + bn * samples + n) += (filter_t) (*(data+n)); // just sum into first record.
+    *(output+n) = (avgdata_t) (*(yd+bn*samples + n) / (filter_t) samples_since_clear);  // convert
+  }
     }
   else
     {
       bn = (bn + 1) % records;  // increment ring buffer pointer
       for (uint n = 0; n < samples; n++)
-	{
-	  *(xd + bn * samples + n) = (filter_t) (*(data+n));  // convert to doubles
-	}
+  {
+    *(xd + bn * samples + n) = (filter_t) (*(data+n));  // convert to doubles
+  }
       memset(yd + bn * samples, 0, samples * sizeof(filter_t)); // clear new y data
       for (uint n = 0; n < samples; n++) // loop over channels for filter
-	{
-	  *(yd + bn * samples + n) = b[0] * *(xd + bn * samples + n);
-	  for(int r = 1; r <= order; r++) // one more record than order.(eg order = 0 is record)
-	    {
-	      int nx = (bn - r) % records;  // should give the correct buffer reference
-	      *(yd + bn * samples + n) += b[r] * *(xd + nx * samples + n) - a[r] * *(yd + nx * samples + n);
-	    }
-	  *(yd +bn * samples + n) = *(yd+bn * samples +n) / a[0];  // divide final answer
-	  *(output+n) = (avgdata_t) ( *(yd+bn*samples + n) * (g) );
-	}
+  {
+    *(yd + bn * samples + n) = b[0] * *(xd + bn * samples + n);
+    for(int r = 1; r <= order; r++) // one more record than order.(eg order = 0 is record)
+      {
+        int nx = (bn - r) % records;  // should give the correct buffer reference
+        *(yd + bn * samples + n) += b[r] * *(xd + nx * samples + n) - a[r] * *(yd + nx * samples + n);
+      }
+    *(yd +bn * samples + n) = *(yd+bn * samples +n) / a[0];  // divide final answer
+    *(output+n) = (avgdata_t) ( *(yd+bn*samples + n) * (g) );
+  }
     }
   return(output);
 }
@@ -1127,24 +1177,24 @@ smurf_t* SmurfTestData::gen_test_smurf_data(smurf_t *input, uint mode, uint sync
       break;
     case 3:
       for (uint j = 0; j < smurf_samples; j++)
-	{
-	  input[j] = 2*toggle * square_wave_amplitude - square_wave_amplitude;
-	}
+  {
+    input[j] = 2*toggle * square_wave_amplitude - square_wave_amplitude;
+  }
       if (  (counter != sync) &&   ((sync % square_wave_cycles) == 0))
-	{
-	  toggle = toggle ? 0 : 1;
-	  counter = sync;
-	}
+  {
+    toggle = toggle ? 0 : 1;
+    counter = sync;
+  }
       break;
     case 4:
        for (uint j = 0; j < smurf_samples; j++)
-	 {
-	   int x = rand(); // random  number
-	   xd = x;   // convert to double for simplicity
-	   xd =  xd / (double) RAND_MAX - 0.5;  // scale
-	   xd =(double)  random_amplitude * xd;
-	   input[j] = (smurf_t) xd;
-	 }
+   {
+     int x = rand(); // random  number
+     xd = x;   // convert to double for simplicity
+     xd =  xd / (double) RAND_MAX - 0.5;  // scale
+     xd =(double)  random_amplitude * xd;
+     input[j] = (smurf_t) xd;
+   }
       break;
     case 5:
       counter16++; // 16 bit wrapping counter
@@ -1152,9 +1202,9 @@ smurf_t* SmurfTestData::gen_test_smurf_data(smurf_t *input, uint mode, uint sync
       xd = 2 * 3.14159* xd / 65536.0;
       s = square_wave_amplitude *  sin(xd * (1.0 + (double)param));
       for (uint j = 0; j < smurf_samples; j++)
-	{
-	  input[j] = s;
-	}
+  {
+    input[j] = s;
+  }
     default:
       return(input);
     }
@@ -1187,13 +1237,13 @@ avgdata_t* SmurfTestData::gen_test_mce_data(avgdata_t *input, uint mode, uint sy
     case 15:  // force framedrops
       for (uint j = 0; j < MCE_samples; j++) input[j] = 10000000;
       if (!(sync % 1000))  // drop one out of 1000 frames
-	{
-	  printf("delay by %u ms ", param);
-	  delaytime.tv_sec = 0;  // 0 seconds in delay
-	  delaytime.tv_nsec = param * 1000000 + 250000000;  // WTF??? Has a 250ms offset.  why, oh god why?
-	  int q = nanosleep(&delaytime, NULL);
-	  printf("end delay, %d\n", q);
-	}
+  {
+    printf("delay by %u ms ", param);
+    delaytime.tv_sec = 0;  // 0 seconds in delay
+    delaytime.tv_nsec = param * 1000000 + 250000000;  // WTF??? Has a 250ms offset.  why, oh god why?
+    int q = nanosleep(&delaytime, NULL);
+    printf("end delay, %d\n", q);
+  }
       break;
     default:
       return(input);
