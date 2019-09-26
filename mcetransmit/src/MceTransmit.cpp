@@ -31,6 +31,8 @@
 #include <smurf2mce.h>
 #include <smurftcp.h>
 #include <zmq.hpp>
+#include <iostream>
+#include "tesbiasarray.h"
 
 void error(const char *msg){perror(msg);};    // Just prints errors
 
@@ -44,6 +46,7 @@ namespace ris = rogue::interfaces::stream;
 // Smurf2mce definition should be in smurftcp.h, but doesn't work, not sure why
 class Smurf2MCE : public rogue::interfaces::stream::Slave {
 
+private:
   bool           debug_;
   zmq::context_t context;
   zmq::socket_t  socket;
@@ -69,8 +72,13 @@ class Smurf2MCE : public rogue::interfaces::stream::Slave {
   // of an error in the frame.
   std::size_t badFrameCnt;
 
+  // TesBias values
+  std::array<uint8_t, TesBiasBufferSize> tesBias;   // Array to hold the TesBias values
+  TesBiasArray                           tba;       // Object to access the Tesbias array
+  float                                  tesBiasSF; // TesBias scale factor
+
 public:
-  uint32_t rxCount, rxBytes, rxLast;
+  uint32_t    rxCount, rxBytes, rxLast;
   uint32_t    getCount()            { return rxCount;          } // Total frames
   uint32_t    getBytes()            { return rxBytes;          } // Total Bytes
   uint32_t    getLast()             { return rxLast;           } // Last frame size
@@ -80,7 +88,8 @@ public:
   std::size_t getFrameOutOrderCnt() { return frameOutOrderCnt; } // Get the lost frame counter
   std::size_t getBadFrameCnt()      { return badFrameCnt;      } // Get the bad frame counter
   void        clearFrameCnt();                                   // Clear all frame counters
-
+  void        setTesBias(std::size_t index, int32_t value);      // Receive the TesBias from pyrogue
+  void        setTesBiasSF(float sf);                            // Receive the TesBias scale factor from pyrogue
 
   bool initialized;
   uint internal_counter, fast_internal_counter;  // first is mce frames, second is smurf frames
@@ -133,6 +142,8 @@ public:
             .def("getFrameOutOrderCnt", &Smurf2MCE::getFrameOutOrderCnt)
             .def("getBadFrameCnt",      &Smurf2MCE::getBadFrameCnt)
             .def("clearFrameCnt",       &Smurf2MCE::clearFrameCnt)
+            .def("setTesBias",          &Smurf2MCE::setTesBias)
+            .def("setTesBiasSF",        &Smurf2MCE::setTesBiasSF)
          ;
          bp::implicitly_convertible<boost::shared_ptr<Smurf2MCE>, ris::SlavePtr>();
   };
@@ -142,7 +153,10 @@ Smurf2MCE::Smurf2MCE()
 :
   ris::Slave(),
   context(1),
-  socket(context, ZMQ_PUSH)
+  socket(context, ZMQ_PUSH),
+  tesBias(),
+  tba(tesBias.data(), TesBiasCount),
+  tesBiasSF(1.0)
 {
   rxCount = 0;
   rxBytes = 0;
@@ -286,6 +300,12 @@ void Smurf2MCE::acceptFrame( ris::FramePtr frame )
   // Update the received frame counter
   ++frameRxCnt;
 
+  // Copy TES bias data into Smurf header. Hold mutex while reading the data
+  {
+    std::lock_guard<std::mutex> lock(*tba.getMutex());
+    H->put_field(h_tes_dac_offset,  h_tes_dac_width, tesBias.data());
+  }
+
   if(H->get_test_mode()) T->gen_test_smurf_data(d, H->get_test_mode(), H->get_syncword(), H->get_test_parameter());   // are we using test data, use pointer to data
 
   for(j = 0; j < smurfsamples; j++)
@@ -341,6 +361,7 @@ void Smurf2MCE::acceptFrame( ris::FramePtr frame )
   M->set_word( MCEheader_version_offset,  MCEheader_version); // can be in constructor
   M->set_word( MCEheader_num_rows_offset, H->get_num_rows());
   M->set_word( MCEheader_syncbox_offset, H->get_syncword());
+  M->set_word( MCEheader_user_word_offset, static_cast<uint32_t>( tesBiasSF * H->get_tes_bias(12) ) );
 
   // test data insertion
   if(H->get_test_mode()) T->gen_test_mce_data(average_samples, H->get_test_mode(), H->get_syncword(), H->get_test_parameter());
@@ -444,6 +465,27 @@ Smurf2MCE::~Smurf2MCE() // destructor
 {
 }
 
+// Receive the TesBias from pyrogue
+void Smurf2MCE::setTesBias(std::size_t index, int32_t value)
+{
+  // Hold the mutex while the data tesBias array is being written to.
+  std::lock_guard<std::mutex> lock(*tba.getMutex());
+
+  tba.setWord(index, value);
+}
+
+// Receive the TesBias scale factor from pyrogue
+void Smurf2MCE::setTesBiasSF(float sf)
+{
+  // Hold the mutex while the data tesBias array is being written to.
+  std::lock_guard<std::mutex> lock(*tba.getMutex());
+
+  if (sf == 0.0)
+    std::cerr << "Error: TesBias factor can not be set to zero. Aborting..." << std::endl;
+
+  tesBiasSF = sf;
+}
+
 // Clear the frame counters
 void  Smurf2MCE::clearFrameCnt()
 {
@@ -455,6 +497,8 @@ void  Smurf2MCE::clearFrameCnt()
 
 // Decodes information in the header part of the data from smurf
 SmurfHeader::SmurfHeader()
+:
+  tba(&header[h_tes_dac_offset], TesBiasCount)
 {
 
   last_frame_count = 0;
@@ -473,6 +517,7 @@ SmurfHeader::SmurfHeader()
 void SmurfHeader::copy_header(uint8_t *buffer)
 {
   header = buffer;  // just move the pointer
+  tba.setPtr(&header[h_tes_dac_offset]); // Update the TesBias array pointer
   data_ok = true;  // This is where we first get new data so star with header OK.
 }
 
@@ -643,6 +688,20 @@ uint SmurfHeader::average_control(int num_averages) // returns num averages when
   return(0);
 }
 
+// Get a TES bias value from the smurf header
+int SmurfHeader::get_tes_bias(std::size_t index)
+{
+  try
+  {
+    return tba.getWord(index);
+  }
+  catch (std::runtime_error &e)
+  {
+    std::cerr << "Error on SmurfHeader::get_tes_bias trying to read a TES bias: " << std::endl;
+    std::cerr << e.what() << std::endl;
+    return 0;
+  }
+}
 
 // manages the header for MCE data
 MCEHeader::MCEHeader()
@@ -661,6 +720,11 @@ void MCEHeader::make_header(void)
 void MCEHeader::set_word(uint offset, uint32_t value)
 {
   mce_header[offset] = value & 0xffffffff; // just write value.
+}
+
+uint32_t MCEHeader::get_word(uint offset)
+{
+  return mce_header[offset] & 0xffffffff; // just read value.
 }
 
 // Reads and interprest the smurf2mce.cfg file.
@@ -935,7 +999,6 @@ SmurfValidCheck::SmurfValidCheck() // just creates  all variables.
     fprintf(fp, "Frame Jump file \n");
     fclose(fp);
   }
-
 }
 
 
