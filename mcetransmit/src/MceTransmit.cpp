@@ -649,7 +649,7 @@ uint SmurfHeader::read_config_file(void)
 
 void SmurfHeader::clear_average(void)
 {
-  average_counter==0;
+  average_counter=0;
 }
 
 uint SmurfHeader::average_control(int num_averages) // returns num averages when avearaging is done.
@@ -669,7 +669,7 @@ uint SmurfHeader::average_control(int num_averages) // returns num averages when
   average_counter++; // increment number of frames averaged.
   if (num_averages)
     {
-      if (average_counter == num_averages)
+      if (average_counter >= num_averages)
   {
     average_counter = 0;
     return (num_averages); // end averaging with local control
