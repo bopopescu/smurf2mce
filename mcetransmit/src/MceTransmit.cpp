@@ -132,7 +132,7 @@ public:
 
       // Expose methods to python
   static void setup_python() {
-         bp::class_<Smurf2MCE, boost::shared_ptr<Smurf2MCE>, bp::bases<ris::Slave>, boost::noncopyable >("Smurf2MCE",bp::init<>())
+         bp::class_<Smurf2MCE, std::shared_ptr<Smurf2MCE>, bp::bases<ris::Slave>, boost::noncopyable >("Smurf2MCE",bp::init<>())
             .def("getCount",            &Smurf2MCE::getCount)
             .def("getBytes",            &Smurf2MCE::getBytes)
             .def("getLast",             &Smurf2MCE::getLast)
@@ -145,7 +145,7 @@ public:
             .def("setTesBias",          &Smurf2MCE::setTesBias)
             .def("setTesBiasSF",        &Smurf2MCE::setTesBiasSF)
          ;
-         bp::implicitly_convertible<boost::shared_ptr<Smurf2MCE>, ris::SlavePtr>();
+         bp::implicitly_convertible<std::shared_ptr<Smurf2MCE>, ris::SlavePtr>();
   };
 };
 
