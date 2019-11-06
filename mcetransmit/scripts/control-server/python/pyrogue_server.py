@@ -263,7 +263,7 @@ class LocalServer(pyrogue.Root):
             self.smurf2mce.setDebug( False )
             #pyrogue.streamConnect(base.FpgaTopLevel.stream.application(0xC1), data_fifo) # new
             #pyrogue.streamConnect(base.FpgaTopLevel.stream.Application(0xC1), data_fifo) # new
-            pyrogue.streamConnect(fpga.stream.application(0xC1), data_fifo)
+            pyrogue.streamConnect(fpga.stream.application(0xC0), data_fifo)
             pyrogue.streamConnect(data_fifo, self.smurf2mce)
             #pyrogue.streamTap(fpga.stream.application(0xC1), rx)
 
@@ -443,7 +443,7 @@ class LocalServer(pyrogue.Root):
                         else:
                             fifo_size = stream_pv_size * 4
 
-                        stream_fifo = rogue.interfaces.stream.Fifo(0, fifo_size, 0) # chnages
+                        stream_fifo = rogue.interfaces.stream.Fifo(fifo_size, 0, 0) # chnages
                         stream_fifo._setSlave(stream_slave)
                         pyrogue.streamTap(fpga.stream.application(0x80+i), stream_fifo)
 
