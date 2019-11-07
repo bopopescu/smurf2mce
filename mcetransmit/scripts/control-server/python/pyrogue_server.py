@@ -263,7 +263,7 @@ class LocalServer(pyrogue.Root):
             self.smurf2mce.setDebug( False )
             #pyrogue.streamConnect(base.FpgaTopLevel.stream.application(0xC1), data_fifo) # new
             #pyrogue.streamConnect(base.FpgaTopLevel.stream.Application(0xC1), data_fifo) # new
-            pyrogue.streamConnect(fpga.stream.application(0xC0), data_fifo)
+            pyrogue.streamConnect(fpga.stream.application(0xC1), data_fifo)
             pyrogue.streamConnect(data_fifo, self.smurf2mce)
             #pyrogue.streamTap(fpga.stream.application(0xC1), rx)
 
