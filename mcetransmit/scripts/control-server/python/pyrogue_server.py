@@ -108,17 +108,17 @@ def exit_message(message):
     print("")
     exit()
 
-class KeepAlive(rogue.interfaces.stream.Master, threading.Thread):
+class KeepAlive(rogue.interfaces.stream.Main, threading.Thread):
     """
     Class used to keep alive the streaming data UDP connection.
 
-    It is a Rogue Master device, which will be connected to the
-    UDP Client slave.
+    It is a Rogue Main device, which will be connected to the
+    UDP Client subordinate.
 
     It will run a thread which will send an UDP packet every
     5 seconds to avoid the connection to be closed. After
     instantiate an object of this class, and connect it to the
-    UDP Client slave, its 'start()' method must be called to
+    UDP Client subordinate, its 'start()' method must be called to
     start the thread itself.
     """
     def __init__(self):
@@ -129,11 +129,11 @@ class KeepAlive(rogue.interfaces.stream.Master, threading.Thread):
         # soon as the main program exits.
         self.daemon = True
 
-        # Request a 1-byte frame from the slave.
+        # Request a 1-byte frame from the subordinate.
         self.frame = self._reqFrame(1, True)
 
         # Create a 1-byte element to be sent to the
-        # slave. The content of the packet is not
+        # subordinate. The content of the packet is not
         # important.
         self.ba = bytearray(1)
 
@@ -417,9 +417,9 @@ class LocalServer(pyrogue.Root):
                     .format(stream_pv_size,stream_pv_type))
 
                 self.stream_fifos  = []
-                self.stream_slaves = []
+                self.stream_subordinates = []
                 for i in range(4):
-                    self.stream_slaves.append(self.epics.createSlave(name="AMCc:Stream{}".format(i),
+                    self.stream_subordinates.append(self.epics.createSubordinate(name="AMCc:Stream{}".format(i),
                         maxSize=stream_pv_size, type=stream_pv_type))
 
                     # Calculate number of bytes needed on the fifo
@@ -429,7 +429,7 @@ class LocalServer(pyrogue.Root):
                         fifo_size = stream_pv_size * 4
 
                     self.stream_fifos.append(rogue.interfaces.stream.Fifo(1000, fifo_size, True)) # changes
-                    self.stream_fifos[i]._setSlave(self.stream_slaves[i])
+                    self.stream_fifos[i]._setSubordinate(self.stream_subordinates[i])
                     pyrogue.streamTap(self.ddr_streams[i], self.stream_fifos[i])
 
             self.epics.start()
